@@ -1,18 +1,256 @@
 use adw::{NavigationPage, ToolbarView, HeaderBar};
-use gtk4::{self as gtk, ListBox, ListBoxRow, Label, ScrolledWindow, SelectionMode, Box, Orientation};
+use gtk4::{self as gtk, ListBox, ListBoxRow, Label, ScrolledWindow, SelectionMode,
+           Box, Orientation, Button, Image};
 use gtk4::prelude::*;
+use glib;
+use gdk4;
+use std::time::Duration;
 use std::path::PathBuf;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 use crate::state::SharedState;
 use crate::player::PlayerCommand;
 
+// ── Types ────────────────────────────────────────────────────────────────────
+
+type Items = Rc<RefCell<Vec<(String, PathBuf)>>>;
+
 pub struct PlaylistPanel {
     page: NavigationPage,
     list: ListBox,
+    items: Items,
+    state: SharedState,
 }
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn fmt_duration(total_secs: u64) -> String {
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+}
+
+/// Probe duration via ffprobe in a background thread; update label when done.
+/// WeakRef<Label> stays on the main thread — only f64 crosses the boundary.
+fn probe_duration_async(path: PathBuf, label: Label) {
+    let weak = label.downgrade();
+    let (tx, rx) = std::sync::mpsc::channel::<Option<f64>>();
+
+    std::thread::spawn(move || {
+        let duration = std::process::Command::new("ffprobe")
+            .args([
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(&path)
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<f64>().ok());
+        tx.send(duration).ok();
+    });
+
+    // Poll from the main thread every 100 ms — no Send requirement.
+    glib::timeout_add_local(Duration::from_millis(100), move || {
+        match rx.try_recv() {
+            Ok(duration) => {
+                if let Some(lbl) = weak.upgrade() {
+                    if let Some(d) = duration {
+                        lbl.set_label(&fmt_duration(d as u64));
+                    }
+                }
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}
+
+// ── Row factory ──────────────────────────────────────────────────────────────
+
+/// Build a single playlist row widget with play-indicator, title, duration, and
+/// a remove button.  DragSource + DropTarget are attached for reordering.
+fn make_row(
+    title: &str,
+    path: &PathBuf,
+    items: &Items,
+    state: &SharedState,
+    list: &ListBox,
+) -> ListBoxRow {
+    let row = ListBoxRow::builder()
+        .css_classes(vec!["playlist-row"])
+        .build();
+
+    // ── Inner layout ──────────────────────────────────────────────────────
+    let content = Box::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .margin_start(8)
+        .margin_end(4)
+        .margin_top(5)
+        .margin_bottom(5)
+        .build();
+
+    // Playing indicator: shown via CSS only when the row is selected.
+    let play_icon = Image::builder()
+        .icon_name("media-playback-start-symbolic")
+        .pixel_size(10)
+        .css_classes(vec!["playing-icon"])
+        .build();
+
+    let title_lbl = Label::builder()
+        .label(title)
+        .halign(gtk::Align::Start)
+        .hexpand(true)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .build();
+
+    let dur_lbl = Label::builder()
+        .label("--:--")
+        .css_classes(vec!["caption", "dim-label"])
+        .build();
+
+    let remove_btn = Button::builder()
+        .icon_name("list-remove-symbolic")
+        .css_classes(vec!["flat", "circular"])
+        .valign(gtk::Align::Center)
+        .build();
+
+    content.append(&play_icon);
+    content.append(&title_lbl);
+    content.append(&dur_lbl);
+    content.append(&remove_btn);
+    row.set_child(Some(&content));
+
+    probe_duration_async(path.clone(), dur_lbl);
+
+    // ── Remove ────────────────────────────────────────────────────────────
+    {
+        let items_c = items.clone();
+        let state_c = state.clone();
+        let list_c = list.downgrade();
+        let row_c = row.downgrade();
+        remove_btn.connect_clicked(move |_| {
+            let Some(list) = list_c.upgrade() else { return };
+            let Some(row) = row_c.upgrade() else { return };
+            let idx = row.index() as usize;
+
+            items_c.borrow_mut().remove(idx);
+
+            {
+                let mut s = state_c.borrow_mut();
+                if idx < s.playlist.len() {
+                    s.playlist.remove(idx);
+                }
+                if let Some(cur) = s.current_idx {
+                    s.current_idx = if cur == idx {
+                        None
+                    } else if cur > idx {
+                        Some(cur - 1)
+                    } else {
+                        Some(cur)
+                    };
+                }
+            }
+
+            rebuild_list(&list, &items_c, &state_c);
+        });
+    }
+
+    // ── Drag source ───────────────────────────────────────────────────────
+    let drag_src = gtk::DragSource::builder()
+        .actions(gdk4::DragAction::MOVE)
+        .build();
+    {
+        let row_c = row.downgrade();
+        drag_src.connect_prepare(move |src, _, _| {
+            let row = row_c.upgrade()?;
+            let idx = row.index() as u64;
+            let paintable = gtk::WidgetPaintable::new(Some(&row));
+            src.set_icon(Some(&paintable), 0, 0);
+            Some(gdk4::ContentProvider::for_value(&idx.to_value()))
+        });
+    }
+    row.add_controller(drag_src);
+
+    // ── Drop target ───────────────────────────────────────────────────────
+    let drop_tgt = gtk::DropTarget::new(u64::static_type(), gdk4::DragAction::MOVE);
+    {
+        let items_c = items.clone();
+        let state_c = state.clone();
+        let list_c = list.downgrade();
+        let row_c = row.downgrade();
+        drop_tgt.connect_drop(move |_, value, _, _| {
+            let Ok(src_idx) = value.get::<u64>() else { return false };
+            let src_idx = src_idx as usize;
+            let Some(row) = row_c.upgrade() else { return false };
+            let dst_idx = row.index() as usize;
+            if src_idx == dst_idx { return false; }
+
+            {
+                let mut its = items_c.borrow_mut();
+                if src_idx >= its.len() || dst_idx >= its.len() { return false; }
+                let item = its.remove(src_idx);
+                its.insert(dst_idx, item);
+            }
+
+            {
+                let mut s = state_c.borrow_mut();
+                let len = s.playlist.len();
+                if src_idx < len && dst_idx < len {
+                    let p = s.playlist.remove(src_idx);
+                    s.playlist.insert(dst_idx, p);
+                    if let Some(cur) = s.current_idx {
+                        s.current_idx = Some(if cur == src_idx {
+                            dst_idx
+                        } else if src_idx < cur && cur <= dst_idx {
+                            cur - 1
+                        } else if dst_idx <= cur && cur < src_idx {
+                            cur + 1
+                        } else {
+                            cur
+                        });
+                    }
+                }
+            }
+
+            if let Some(list) = list_c.upgrade() {
+                rebuild_list(&list, &items_c, &state_c);
+                // Re-select the moved item
+                if let Some(row) = list.row_at_index(dst_idx as i32) {
+                    list.select_row(Some(&row));
+                }
+            }
+            true
+        });
+    }
+    row.add_controller(drop_tgt);
+
+    row
+}
+
+/// Remove all list rows and re-create them from `items`.
+fn rebuild_list(list: &ListBox, items: &Items, state: &SharedState) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    let its = items.borrow();
+    for (title, path) in its.iter() {
+        let row = make_row(title, path, items, state, list);
+        list.append(&row);
+    }
+}
+
+// ── PlaylistPanel ─────────────────────────────────────────────────────────────
 
 impl PlaylistPanel {
     pub fn new(state: SharedState) -> Self {
+        let items: Items = Rc::new(RefCell::new(Vec::new()));
+
         let list = ListBox::builder()
             .selection_mode(SelectionMode::Single)
             .css_classes(vec!["boxed-list"])
@@ -23,9 +261,7 @@ impl PlaylistPanel {
             .vexpand(true)
             .build();
 
-        let toolbar = ToolbarView::builder()
-            .content(&scroll)
-            .build();
+        let toolbar = ToolbarView::builder().content(&scroll).build();
 
         let header = HeaderBar::builder()
             .title_widget(&gtk::Label::new(Some("Playlist")))
@@ -40,7 +276,7 @@ impl PlaylistPanel {
             .title("Playlist")
             .build();
 
-        // ── Signal: activate row → play that file ─────────────────────────
+        // Row click → play
         {
             let state_c = state.clone();
             list.connect_row_activated(move |_, row| {
@@ -58,38 +294,26 @@ impl PlaylistPanel {
             });
         }
 
-        Self { page, list }
+        Self { page, list, items, state }
     }
 
     pub fn widget(&self) -> &NavigationPage {
         &self.page
     }
 
-    /// Append one file to the visible list.
-    pub fn add_item(&self, title: &str, _path: &PathBuf) {
-        let row = ListBoxRow::new();
-        let label = Label::builder()
-            .label(title)
-            .halign(gtk::Align::Start)
-            .margin_top(6)
-            .margin_bottom(6)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
-        let inner = Box::new(Orientation::Horizontal, 0);
-        inner.append(&label);
-        row.set_child(Some(&inner));
+    pub fn add_item(&self, title: &str, path: &PathBuf) {
+        self.items.borrow_mut().push((title.to_string(), path.clone()));
+        let row = make_row(title, path, &self.items, &self.state, &self.list);
         self.list.append(&row);
     }
 
-    /// Remove all rows from the list.
     pub fn clear(&self) {
+        self.items.borrow_mut().clear();
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
         }
     }
 
-    /// Highlight the row at `idx` without emitting `row-activated`.
     pub fn select_row(&self, idx: usize) {
         if let Some(row) = self.list.row_at_index(idx as i32) {
             self.list.select_row(Some(&row));

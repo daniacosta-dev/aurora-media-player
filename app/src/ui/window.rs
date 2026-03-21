@@ -472,7 +472,7 @@ impl MediaWindow {
             }
 
             if let Some(win) = window_weak.upgrade() {
-                win.set_title(title.as_deref().or(Some("Aurora Media")));
+                win.set_title(title.as_deref().or(Some("Aurora Media Player")));
 
                 if win.property::<bool>("fullscreened") {
                     let idle_secs = last_motion.get().elapsed().as_secs_f64();

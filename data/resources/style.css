@@ -29,6 +29,17 @@
     opacity: 1;
 }
 
+/* Playlist */
+.playing-icon {
+    opacity: 0;
+    color: @accent_color;
+    transition: opacity 150ms ease;
+}
+
+row:selected .playing-icon {
+    opacity: 1;
+}
+
 /* Audio-only view */
 .audio-cover-icon {
     margin-bottom: 16px;
