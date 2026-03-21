@@ -6,7 +6,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-authors = ["Aurora Contributors"]
+authors = ["Daniel Acosta"]
 
 [workspace.dependencies]
 gtk4 = { version = "0.8", features = ["v4_12"] }
