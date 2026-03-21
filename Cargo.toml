@@ -1,0 +1,25 @@
+[workspace]
+members = ["app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["Aurora Contributors"]
+
+[workspace.dependencies]
+gtk4 = { version = "0.8", features = ["v4_12"] }
+adw = { version = "0.6", package = "libadwaita", features = ["v1_5"] }
+glib = "0.19"
+gio = "0.19"
+gdk4 = "0.8"
+libmpv = { version = "2.0.2-fork.1", package = "libmpv-sirno" }
+libmpv_sys = { version = "2.0.0-fork.1", package = "libmpv-sys-sirno" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+libc = "0.2"
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"

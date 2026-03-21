@@ -1,0 +1,52 @@
+name: aurora-media-player
+base: core24
+version: '0.1.0'
+summary: Modern media player for GNOME
+description: |
+  Aurora Media Player is a modern, Haruna-inspired media player for GNOME.
+  Built with GTK4, libadwaita, and mpv for high-quality playback.
+  Supports video and audio in all common formats.
+
+grade: devel
+confinement: strict
+
+# The gnome extension wires up GTK4, libadwaita, Wayland/X11, theming,
+# and common GNOME portal interfaces.  It also sets SNAP_DESKTOP_RUNTIME
+# and adjusts LD_LIBRARY_PATH so the runtime libraries from the platform
+# snap are found at runtime — no manual rpath hacks needed.
+apps:
+  aurora-media-player:
+    command: bin/aurora-media
+    extensions: [gnome]
+    plugs:
+      - audio-playback   # PipeWire / PulseAudio
+      - home             # ~/Videos, ~/Music, ~/Downloads
+      - removable-media  # USB drives, external disks
+      - opengl           # GPU decoding (vaapi) + OpenGL render API
+    environment:
+      # Prefer hardware-accelerated decoding; mpv falls back gracefully.
+      LIBVA_DRIVER_NAME: ""
+
+parts:
+  aurora-media:
+    plugin: rust
+    source: .
+    # build-environment inherits CARGO_HOME etc. from the rust plugin.
+    build-packages:
+      - libmpv-dev
+      - libepoxy-dev
+      - pkg-config
+    stage-packages:
+      # mpv runtime library — not provided by the GNOME platform snap.
+      - libmpv2
+      # VA-API for hardware decoding on Intel/AMD.
+      - libva2
+      - libva-drm2
+      - libva-x11-2
+      # Mesa — needed for software GL fallback and vaapi on open drivers.
+      - libgl1-mesa-dri
+    override-build: |
+      craftctl default
+      # Ensure the binary lands in $CRAFT_PART_INSTALL/bin/
+      install -Dm755 target/release/aurora-media \
+        "$CRAFT_PART_INSTALL/bin/aurora-media"

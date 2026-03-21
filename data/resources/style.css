@@ -1,0 +1,36 @@
+/* Aurora Media Player — custom stylesheet */
+
+.controls-bar {
+    padding: 0;
+    background-color: @headerbar_bg_color;
+    border-top: 1px solid @borders;
+}
+
+.seekbar trough {
+    min-height: 4px;
+}
+
+.seekbar trough highlight {
+    background-color: @accent_color;
+}
+
+.seekbar slider {
+    min-width: 12px;
+    min-height: 12px;
+}
+
+/* Hide slider knob by default, show on hover */
+.seekbar slider {
+    opacity: 0;
+    transition: opacity 150ms ease;
+}
+
+.seekbar:hover slider {
+    opacity: 1;
+}
+
+/* Audio-only view */
+.audio-cover-icon {
+    margin-bottom: 16px;
+    opacity: 0.5;
+}

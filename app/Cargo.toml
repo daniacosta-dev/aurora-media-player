@@ -1,0 +1,29 @@
+[package]
+name = "aurora-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Modern media player for GNOME — part of the Aurora suite"
+
+[[bin]]
+name = "aurora-media"
+path = "src/main.rs"
+
+[dependencies]
+gtk4.workspace = true
+adw.workspace = true
+glib.workspace = true
+gio.workspace = true
+gdk4.workspace = true
+libmpv.workspace = true
+libmpv_sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+log.workspace = true
+env_logger.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+
+[build-dependencies]
+glib-build-tools = "0.20"

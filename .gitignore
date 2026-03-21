@@ -1,0 +1,4 @@
+target/
+*.gresource
+Cargo.lock
+.env
