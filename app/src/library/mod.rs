@@ -1,3 +1,3 @@
 mod scanner;
 
-pub use scanner::{MediaItem, MediaKind};
+pub use scanner::{scan_directory, MediaItem, MediaKind};

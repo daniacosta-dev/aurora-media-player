@@ -133,6 +133,14 @@ impl MpvPlayer {
         self.mpv.get_property("media-title").ok()
     }
 
+    /// True when mpv has played to the end of the current file.
+    /// With keep-open=yes, mpv pauses at the last frame instead of closing.
+    pub fn eof_reached(&self) -> bool {
+        self.mpv
+            .get_property::<bool>("eof-reached")
+            .unwrap_or(false)
+    }
+
     pub fn is_idle(&self) -> bool {
         self.mpv
             .get_property::<bool>("idle-active")

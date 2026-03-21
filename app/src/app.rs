@@ -1,5 +1,5 @@
 use adw::prelude::*;
-use adw::{Application, ApplicationWindow};
+use adw::Application;
 use gtk4 as gtk;
 use gio::ApplicationFlags;
 
@@ -18,6 +18,7 @@ impl AuroraMediaApp {
 
         app.connect_startup(|_| {
             adw::init().expect("Failed to initialize libadwaita");
+            gtk::Window::set_default_icon_name(APP_ID);
         });
 
         app.connect_activate(|app| {

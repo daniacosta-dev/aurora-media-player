@@ -7,14 +7,15 @@ use crate::player::PlayerCommand;
 
 pub struct PlayerControls {
     root: Box,
+    prev_btn: Button,
     play_btn: Button,
+    next_btn: Button,
     vol_btn: Button,
     seek_bar: Scale,
     vol_slider: Scale,
     elapsed: Label,
     remaining: Label,
-    /// Handler ID for the seek bar — blocked during programmatic updates
-    /// to avoid triggering a seek back to the current position.
+    /// Blocked during programmatic set_value() to avoid feedback loops.
     seek_handler: glib::SignalHandlerId,
 }
 
@@ -102,7 +103,6 @@ impl PlayerControls {
         vol_box.append(&vol_btn);
         vol_box.append(&vol_slider);
 
-        // Left spacer keeps center buttons centered over the full width.
         let left_spacer = Box::builder().hexpand(true).build();
         end_row.append(&left_spacer);
         end_row.append(&center_btns);
@@ -112,7 +112,7 @@ impl PlayerControls {
         root.append(&time_row);
         root.append(&end_row);
 
-        // ── Signal: play/pause button ─────────────────────────────────────
+        // ── Signal: play/pause ────────────────────────────────────────────
         {
             let state_c = state.clone();
             play_btn.connect_clicked(move |_| {
@@ -156,7 +156,11 @@ impl PlayerControls {
             });
         }
 
-        // ── Signal: seek bar (user drags) ─────────────────────────────────
+        // ── Signal: seek bar ──────────────────────────────────────────────
+        // connect_value_changed fires for user drags, scroll, and keyboard on
+        // the Scale — but NOT when we call set_value() while the signal is
+        // blocked.  mpv discards intermediate seeks during a fast drag, so
+        // sending one per event is fine.
         let seek_handler = {
             let state_c = state.clone();
             seek_bar.connect_value_changed(move |scale| {
@@ -179,7 +183,7 @@ impl PlayerControls {
             });
         }
 
-        // ── Signal: mute button ───────────────────────────────────────────
+        // ── Signal: mute ─────────────────────────────────────────────────
         {
             let state_c = state.clone();
             vol_btn.connect_clicked(move |_| {
@@ -194,7 +198,9 @@ impl PlayerControls {
 
         Self {
             root,
+            prev_btn,
             play_btn,
+            next_btn,
             vol_btn,
             seek_bar,
             vol_slider,
@@ -208,9 +214,14 @@ impl PlayerControls {
         &self.root
     }
 
-    /// Called from the 200 ms polling timeout to keep the UI in sync with mpv.
-    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64) {
-        // Update seek bar without re-triggering the seek signal.
+    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, idle: bool) {
+        let has_media = !idle;
+        self.play_btn.set_sensitive(has_media);
+        self.prev_btn.set_sensitive(has_media);
+        self.next_btn.set_sensitive(has_media);
+        self.seek_bar.set_sensitive(has_media);
+
+        // Update position without triggering a seek back.
         self.seek_bar.block_signal(&self.seek_handler);
         if dur > 0.0 {
             self.seek_bar.set_value(pos / dur);

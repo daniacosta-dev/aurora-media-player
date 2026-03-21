@@ -7,11 +7,12 @@ use crate::player::{MpvPlayer, RenderContext};
 pub struct PlayerState {
     pub player: Option<MpvPlayer>,
     /// OpenGL render context — lives alongside the player.
-    /// Created in GLArea::realize and dropped in GLArea::unrealize.
     pub render_ctx: Option<RenderContext>,
     pub playlist: Vec<PathBuf>,
     pub current_idx: Option<usize>,
     pub muted: bool,
+    /// When set, the polling loop will seek to this position once the file loads.
+    pub pending_seek: Option<f64>,
 }
 
 /// Single-threaded shared handle used throughout the UI tree.
@@ -28,6 +29,12 @@ impl PlayerState {
             playlist: Vec::new(),
             current_idx: None,
             muted: false,
+            pending_seek: None,
         }))
+    }
+
+    /// Path to the session file in the user data directory.
+    pub fn session_path() -> Option<PathBuf> {
+        dirs::data_dir().map(|d| d.join("aurora-media").join("session.json"))
     }
 }
