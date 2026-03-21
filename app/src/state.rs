@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 
 use crate::player::{MpvPlayer, RenderContext};
+use crate::player::RepeatMode;
 
 pub struct PlayerState {
     pub player: Option<MpvPlayer>,
@@ -15,6 +16,7 @@ pub struct PlayerState {
     pub pending_seek: Option<f64>,
     /// File to open once the GL render context is ready (session restore).
     pub pending_open: Option<PathBuf>,
+    pub repeat_mode: RepeatMode,
 }
 
 /// Single-threaded shared handle used throughout the UI tree.
@@ -33,6 +35,7 @@ impl PlayerState {
             muted: false,
             pending_seek: None,
             pending_open: None,
+            repeat_mode: RepeatMode::default(),
         }))
     }
 

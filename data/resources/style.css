@@ -1,26 +1,42 @@
 /* Aurora Media Player — custom stylesheet */
 
+/* ── Controls bar — floating dark card ─────────────────────────────────────── */
 .controls-bar {
-    padding: 0;
-    background-color: @window_bg_color;
-    border-top: 1px solid @borders;
+    padding: 2px 8px 6px;
+    margin: 0 16px 12px;
+    background-color: @headerbar_bg_color;
+    opacity: 0.75;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
 }
 
+/* Force light colors inside the dark controls bar */
+.controls-bar button {
+    color: white;
+}
+
+.controls-bar label {
+    color: rgba(255, 255, 255, 0.85);
+}
+
+/* ── Seek bar ───────────────────────────────────────────────────────────────── */
 .seekbar trough {
-    min-height: 4px;
+    min-height: 5px;
+    border-radius: 99px;
+    background-color: rgba(255, 255, 255, 0.25);
 }
 
 .seekbar trough highlight {
     background-color: @accent_color;
+    border-radius: 99px;
 }
 
+/* Hide slider thumb by default, reveal on hover */
 .seekbar slider {
-    min-width: 12px;
-    min-height: 12px;
-}
-
-/* Hide slider knob by default, show on hover */
-.seekbar slider {
+    min-width: 14px;
+    min-height: 14px;
+    border-radius: 99px;
     opacity: 0;
     transition: opacity 150ms ease;
 }
@@ -29,19 +45,68 @@
     opacity: 1;
 }
 
-/* Playlist */
-.playing-icon {
-    opacity: 0;
-    color: @accent_color;
-    transition: opacity 150ms ease;
+/* ── Playlist ───────────────────────────────────────────────────────────────── */
+
+/* Flat list — no boxed-list chrome, no separators between items */
+.playlist-list {
+    background: transparent;
+    padding: 4px 0;
 }
 
-row:selected .playing-icon {
+.playlist-list > row {
+    border-radius: 10px;
+    margin: 2px 8px;
+    transition: background-color 150ms ease;
+}
+
+.playlist-list > row:hover {
+    background-color: alpha(@window_fg_color, 0.06);
+}
+
+.playlist-list > row:selected {
+    background-color: alpha(@accent_color, 0.20);
+    color: @window_fg_color;
+    box-shadow: none;
+}
+
+/* Track number — tabular digits for consistent column width */
+.track-number {
+    min-width: 28px;
+    opacity: 0.35;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Active track: accent number + bold title */
+.playlist-list > row:selected .track-number {
     opacity: 1;
+    color: @accent_color;
 }
 
-/* Audio-only view */
+.playlist-list > row:selected label.playlist-title {
+    font-weight: 600;
+    color: @accent_color;
+}
+
+/* Duration — fixed width so the remove button stays put */
+label.playlist-duration {
+    min-width: 44px;
+}
+
+/* Duration label on active row */
+.playlist-list > row:selected label.playlist-duration {
+    opacity: 0.65;
+}
+
+/* ── Repeat button ──────────────────────────────────────────────────────────── */
+.repeat-btn {
+    color: white;
+}
+
+/* ── Audio-only view ────────────────────────────────────────────────────────── */
 .audio-cover-icon {
-    margin-bottom: 16px;
-    opacity: 0.5;
+    margin-bottom: 20px;
+    opacity: 0.6;
+    padding: 32px;
+    border-radius: 9999px;
+    background-color: alpha(@window_fg_color, 0.06);
 }

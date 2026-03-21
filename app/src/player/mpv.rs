@@ -4,7 +4,7 @@ use libmpv::Mpv;
 use libmpv_sys;
 use libc;
 
-use super::pipeline::PlayerCommand;
+use super::pipeline::{PlayerCommand, RepeatMode};
 use super::render::RenderContext;
 
 /// Call mpv_command using the safe null-terminated pointer array API.
@@ -105,6 +105,20 @@ impl MpvPlayer {
             PlayerCommand::Screenshot => {
                 self.mpv.command("screenshot", &[]).ok();
             }
+            PlayerCommand::SetRepeat(mode) => match mode {
+                RepeatMode::None => {
+                    self.mpv.set_property("loop-playlist", "no").ok();
+                    self.mpv.set_property("loop-file", "no").ok();
+                }
+                RepeatMode::Playlist => {
+                    self.mpv.set_property("loop-playlist", "inf").ok();
+                    self.mpv.set_property("loop-file", "no").ok();
+                }
+                RepeatMode::One => {
+                    self.mpv.set_property("loop-file", "inf").ok();
+                    self.mpv.set_property("loop-playlist", "no").ok();
+                }
+            },
         }
         Ok(())
     }

@@ -4,12 +4,14 @@ use glib;
 
 use crate::state::SharedState;
 use crate::player::PlayerCommand;
+use crate::player::RepeatMode;
 
 pub struct PlayerControls {
     root: Box,
     prev_btn: Button,
     play_btn: Button,
     next_btn: Button,
+    repeat_btn: Button,
     vol_btn: Button,
     seek_bar: Scale,
     vol_slider: Scale,
@@ -66,6 +68,12 @@ impl PlayerControls {
             .icon_name("media-skip-forward-symbolic")
             .build();
 
+        // ── Repeat ────────────────────────────────────────────────────────
+        let repeat_btn = Button::builder()
+            .icon_name("media-playlist-repeat-symbolic")
+            .css_classes(vec!["repeat-btn"])
+            .build();
+
         // ── Volume ────────────────────────────────────────────────────────
         let vol_btn = Button::builder()
             .icon_name("audio-volume-high-symbolic")
@@ -103,8 +111,15 @@ impl PlayerControls {
         vol_box.append(&vol_btn);
         vol_box.append(&vol_slider);
 
-        let left_spacer = Box::builder().hexpand(true).build();
-        end_row.append(&left_spacer);
+        let left_box = Box::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(4)
+            .halign(gtk::Align::Start)
+            .hexpand(true)
+            .build();
+        left_box.append(&repeat_btn);
+
+        end_row.append(&left_box);
         end_row.append(&center_btns);
         end_row.append(&vol_box);
 
@@ -156,6 +171,25 @@ impl PlayerControls {
             });
         }
 
+        // ── Signal: repeat ───────────────────────────────────────────────
+        {
+            let state_c = state.clone();
+            repeat_btn.connect_clicked(move |_| {
+                let next_mode = {
+                    let mut s = state_c.borrow_mut();
+                    s.repeat_mode = match s.repeat_mode {
+                        RepeatMode::None     => RepeatMode::Playlist,
+                        RepeatMode::Playlist => RepeatMode::One,
+                        RepeatMode::One      => RepeatMode::None,
+                    };
+                    s.repeat_mode
+                };
+                if let Some(p) = state_c.borrow().player.as_ref() {
+                    p.execute(PlayerCommand::SetRepeat(next_mode)).ok();
+                }
+            });
+        }
+
         // ── Signal: seek bar ──────────────────────────────────────────────
         // connect_value_changed fires for user drags, scroll, and keyboard on
         // the Scale — but NOT when we call set_value() while the signal is
@@ -201,6 +235,7 @@ impl PlayerControls {
             prev_btn,
             play_btn,
             next_btn,
+            repeat_btn,
             vol_btn,
             seek_bar,
             vol_slider,
@@ -230,7 +265,7 @@ impl PlayerControls {
     }
 
     /// Called at ~200 ms — updates buttons and state-driven UI.
-    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, idle: bool) {
+    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, idle: bool, repeat: RepeatMode) {
         let has_media = !idle;
         self.play_btn.set_sensitive(has_media);
         self.prev_btn.set_sensitive(has_media);
@@ -254,6 +289,22 @@ impl PlayerControls {
         } else {
             "audio-volume-high-symbolic"
         });
+
+        // Repeat button: icon + opacity reflect current mode.
+        match repeat {
+            RepeatMode::None => {
+                self.repeat_btn.set_icon_name("media-playlist-repeat-symbolic");
+                self.repeat_btn.set_opacity(0.35);
+            }
+            RepeatMode::Playlist => {
+                self.repeat_btn.set_icon_name("media-playlist-repeat-symbolic");
+                self.repeat_btn.set_opacity(1.0);
+            }
+            RepeatMode::One => {
+                self.repeat_btn.set_icon_name("media-playlist-repeat-song-symbolic");
+                self.repeat_btn.set_opacity(1.0);
+            }
+        }
     }
 }
 

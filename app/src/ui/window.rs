@@ -436,7 +436,7 @@ impl MediaWindow {
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
             let (pos, dur, paused, muted, volume, title, idle, has_video,
-                 artist, album, eof, pending_seek) = {
+                 artist, album, eof, pending_seek, repeat_mode) = {
                 let s = state_c.borrow();
                 match s.player.as_ref() {
                     None => return glib::ControlFlow::Continue,
@@ -453,6 +453,7 @@ impl MediaWindow {
                         p.metadata_album().unwrap_or_default(),
                         p.eof_reached(),
                         s.pending_seek,
+                        s.repeat_mode,
                     ),
                 }
             };
@@ -489,21 +490,24 @@ impl MediaWindow {
                 }
             }
 
-            controls_c.update(pos, dur, paused, muted, volume, idle);
+            controls_c.update(pos, dur, paused, muted, volume, idle, repeat_mode);
 
             if idle {
                 video_c.set_idle(true);
+                video_c.set_audio_playing(false);
                 video_c.show_video();
             } else if has_video {
                 video_c.set_idle(false);
+                video_c.set_audio_playing(false);
                 video_c.show_video();
             } else {
                 let track_title = title.as_deref().unwrap_or("");
                 video_c.show_audio(track_title, &artist, &album);
+                video_c.set_audio_playing(!paused);
             }
 
             if let Some(win) = window_weak.upgrade() {
-                win.set_title(title.as_deref().or(Some("Aurora Media Player")));
+                win.set_title(Some("Aurora Media Player"));
 
                 if win.property::<bool>("fullscreened") {
                     let idle_secs = last_motion.get().elapsed().as_secs_f64();

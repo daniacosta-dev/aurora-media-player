@@ -1,6 +1,8 @@
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::Duration;
 
+use std::rc::Rc;
+use std::cell::Cell;
 use gtk4::{self as gtk, GLArea, Overlay, Label, Stack, Box, Orientation, Image};
 use gtk4::prelude::*;
 use glib;
@@ -34,6 +36,7 @@ pub struct VideoArea {
     audio_title: Label,
     audio_artist: Label,
     audio_album: Label,
+    wave_playing: Rc<Cell<bool>>,
     // ── video page ────────────────────────────────────────────────────────
     idle_label: Label,
 }
@@ -89,6 +92,68 @@ impl VideoArea {
             .max_width_chars(40)
             .build();
 
+        // ── Waveform visualizer ───────────────────────────────────────────
+        let wave_phase   = Rc::new(Cell::new(0.0_f64));
+        let wave_playing = Rc::new(Cell::new(false));
+
+        let waveform = gtk::DrawingArea::builder()
+            .width_request(220)
+            .height_request(48)
+            .css_classes(vec!["waveform"])
+            .build();
+
+        {
+            let phase_c = wave_phase.clone();
+            waveform.set_draw_func(move |_area, cr, w, h| {
+                let phase   = phase_c.get();
+                let n: i32  = 28;
+                let bar_w   = 3.0_f64;
+                let gap     = 2.5_f64;
+                let total   = n as f64 * (bar_w + gap) - gap;
+                let x0      = (w as f64 - total) / 2.0;
+                let max_h   = h as f64 - 6.0;
+                let min_h   = 3.0_f64;
+
+                for i in 0..n {
+                    let fi  = i as f64 / n as f64;
+                    let t   = phase + fi * std::f64::consts::TAU;
+                    // Two overlapping sines → organic movement
+                    let amp = ((t.sin() * 0.55
+                        + (t * 2.1).sin() * 0.30
+                        + (t * 0.6).cos() * 0.15)
+                        + 1.0) / 2.0;
+                    let bar_h = min_h + amp * (max_h - min_h);
+
+                    // Taper opacity at both edges
+                    let edge  = (fi * std::f64::consts::PI).sin();
+                    let alpha = 0.55 * edge + 0.25;
+
+                    let x = x0 + i as f64 * (bar_w + gap);
+                    let y = (h as f64 - bar_h) / 2.0;
+
+                    cr.set_source_rgba(1.0, 1.0, 1.0, alpha);
+                    cr.rectangle(x, y, bar_w, bar_h);
+                    cr.fill().ok();
+                }
+            });
+        }
+
+        // Advance the phase only while playing; always queue a redraw.
+        {
+            let phase_c   = wave_phase.clone();
+            let playing_c = wave_playing.clone();
+            let wave_weak = waveform.downgrade();
+            glib::timeout_add_local(Duration::from_millis(50), move || {
+                if playing_c.get() {
+                    phase_c.set(phase_c.get() + 0.18);
+                }
+                if let Some(w) = wave_weak.upgrade() {
+                    w.queue_draw();
+                }
+                glib::ControlFlow::Continue
+            });
+        }
+
         let meta_box = Box::builder()
             .orientation(Orientation::Vertical)
             .spacing(4)
@@ -100,6 +165,7 @@ impl VideoArea {
             .margin_end(24)
             .build();
         meta_box.append(&audio_cover);
+        meta_box.append(&waveform);
         meta_box.append(&audio_title);
         meta_box.append(&audio_artist);
         meta_box.append(&audio_album);
@@ -111,6 +177,7 @@ impl VideoArea {
             .valign(gtk::Align::Center)
             .hexpand(true)
             .vexpand(true)
+            .margin_bottom(100)
             .build();
         audio_page.append(&meta_box);
 
@@ -220,6 +287,7 @@ impl VideoArea {
             audio_title,
             audio_artist,
             audio_album,
+            wave_playing,
             idle_label,
         }
     }
@@ -241,6 +309,11 @@ impl VideoArea {
         self.audio_artist.set_visible(!artist.is_empty());
         self.audio_album.set_label(album);
         self.audio_album.set_visible(!album.is_empty());
+    }
+
+    /// Drive the waveform animation — call every polling tick.
+    pub fn set_audio_playing(&self, playing: bool) {
+        self.wave_playing.set(playing);
     }
 
     /// Show or hide the "open a file" placeholder on the video page.

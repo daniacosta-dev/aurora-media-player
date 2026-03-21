@@ -1,3 +1,11 @@
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum RepeatMode {
+    #[default]
+    None,
+    Playlist,
+    One,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlaybackState {
     Idle,
@@ -22,4 +30,5 @@ pub enum PlayerCommand {
     NextFrame,
     PrevFrame,
     Screenshot,
+    SetRepeat(RepeatMode),
 }

@@ -72,9 +72,10 @@ fn probe_duration_async(path: PathBuf, label: Label) {
 
 // ── Row factory ──────────────────────────────────────────────────────────────
 
-/// Build a single playlist row widget with play-indicator, title, duration, and
-/// a remove button.  DragSource + DropTarget are attached for reordering.
+/// Build a single playlist row widget with track number, play-indicator,
+/// title, duration, and a remove button.
 fn make_row(
+    idx: usize,
     title: &str,
     path: &PathBuf,
     items: &Items,
@@ -88,43 +89,63 @@ fn make_row(
     // ── Inner layout ──────────────────────────────────────────────────────
     let content = Box::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(6)
-        .margin_start(8)
-        .margin_end(4)
-        .margin_top(5)
-        .margin_bottom(5)
+        .spacing(10)
+        .margin_start(10)
+        .margin_end(6)
+        .margin_top(8)
+        .margin_bottom(8)
         .build();
 
-    // Playing indicator: shown via CSS only when the row is selected.
-    let play_icon = Image::builder()
-        .icon_name("media-playback-start-symbolic")
-        .pixel_size(10)
-        .css_classes(vec!["playing-icon"])
+    // ── Track number ──────────────────────────────────────────────────────
+    let track_num = Label::builder()
+        .label(&format!("{}", idx + 1))
+        .css_classes(vec!["track-number", "caption"])
+        .width_chars(3)
+        .xalign(1.0)
         .build();
 
+    // ── Title ─────────────────────────────────────────────────────────────
     let title_lbl = Label::builder()
         .label(title)
         .halign(gtk::Align::Start)
         .hexpand(true)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .css_classes(vec!["playlist-title"])
         .build();
 
+    // ── Duration ──────────────────────────────────────────────────────────
     let dur_lbl = Label::builder()
         .label("--:--")
-        .css_classes(vec!["caption", "dim-label"])
+        .css_classes(vec!["caption", "dim-label", "playlist-duration"])
         .build();
 
+    // ── Remove button — invisible by default (opacity 0 keeps layout stable)
     let remove_btn = Button::builder()
         .icon_name("list-remove-symbolic")
         .css_classes(vec!["flat", "circular"])
         .valign(gtk::Align::Center)
         .build();
+    remove_btn.set_opacity(0.0);
 
-    content.append(&play_icon);
+    content.append(&track_num);
     content.append(&title_lbl);
     content.append(&dur_lbl);
     content.append(&remove_btn);
     row.set_child(Some(&content));
+
+    // Fade remove button in/out on row hover — opacity keeps the layout stable.
+    {
+        let btn_enter = remove_btn.downgrade();
+        let btn_leave = remove_btn.downgrade();
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_enter(move |_, _, _| {
+            if let Some(b) = btn_enter.upgrade() { b.set_opacity(1.0); }
+        });
+        motion.connect_leave(move |_| {
+            if let Some(b) = btn_leave.upgrade() { b.set_opacity(0.0); }
+        });
+        row.add_controller(motion);
+    }
 
     probe_duration_async(path.clone(), dur_lbl);
 
@@ -239,8 +260,8 @@ fn rebuild_list(list: &ListBox, items: &Items, state: &SharedState) {
         list.remove(&child);
     }
     let its = items.borrow();
-    for (title, path) in its.iter() {
-        let row = make_row(title, path, items, state, list);
+    for (idx, (title, path)) in its.iter().enumerate() {
+        let row = make_row(idx, title, path, items, state, list);
         list.append(&row);
     }
 }
@@ -253,8 +274,30 @@ impl PlaylistPanel {
 
         let list = ListBox::builder()
             .selection_mode(SelectionMode::Single)
-            .css_classes(vec!["boxed-list"])
+            .css_classes(vec!["playlist-list"])
             .build();
+
+        // ── Empty state placeholder ────────────────────────────────────────
+        let placeholder = Box::builder()
+            .orientation(Orientation::Vertical)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .spacing(10)
+            .margin_top(48)
+            .margin_bottom(48)
+            .build();
+        let ph_icon = Image::builder()
+            .icon_name("folder-videos-symbolic")
+            .pixel_size(48)
+            .css_classes(vec!["dim-label"])
+            .build();
+        let ph_label = Label::builder()
+            .label("Drop files or folders here")
+            .css_classes(vec!["dim-label"])
+            .build();
+        placeholder.append(&ph_icon);
+        placeholder.append(&ph_label);
+        list.set_placeholder(Some(&placeholder));
 
         let scroll = ScrolledWindow::builder()
             .child(&list)
@@ -303,8 +346,13 @@ impl PlaylistPanel {
     }
 
     pub fn add_item(&self, title: &str, path: &PathBuf) {
-        self.items.borrow_mut().push((title.to_string(), path.clone()));
-        let row = make_row(title, path, &self.items, &self.state, &self.list);
+        let idx = {
+            let mut items = self.items.borrow_mut();
+            let idx = items.len();
+            items.push((title.to_string(), path.clone()));
+            idx
+        };
+        let row = make_row(idx, title, path, &self.items, &self.state, &self.list);
         self.list.append(&row);
     }
 
@@ -318,6 +366,7 @@ impl PlaylistPanel {
     pub fn select_row(&self, idx: usize) {
         if let Some(row) = self.list.row_at_index(idx as i32) {
             self.list.select_row(Some(&row));
+            row.grab_focus();
         }
     }
 }
