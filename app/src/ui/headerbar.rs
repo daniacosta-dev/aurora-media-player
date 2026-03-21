@@ -88,6 +88,8 @@ impl MediaHeaderBar {
                     move |result| {
                         if let Ok(file) = result {
                             if let Some(path) = file.path() {
+                                // User chose a new file — cancel any session-restore seek.
+                                state_inner.borrow_mut().pending_seek = None;
                                 if let Some(p) = state_inner.borrow().player.as_ref() {
                                     if let Err(e) = p.execute(PlayerCommand::Open(path)) {
                                         log::error!("open file: {e}");

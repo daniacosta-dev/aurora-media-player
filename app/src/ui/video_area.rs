@@ -162,6 +162,14 @@ impl VideoArea {
                         flag.store(true, Ordering::Relaxed);
                     });
                     state_c.borrow_mut().render_ctx = Some(ctx);
+
+                    // Now that the render context exists, open any session-restore file.
+                    let pending = state_c.borrow_mut().pending_open.take();
+                    if let Some(path) = pending {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(crate::player::PlayerCommand::Open(path)).ok();
+                        }
+                    }
                 }
             });
         }

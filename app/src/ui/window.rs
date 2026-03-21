@@ -44,10 +44,16 @@ fn load_session() -> Option<Session> {
 fn save_session(state: &SharedState, pos: f64) {
     let Some(path) = PlayerState::session_path() else { return };
     let s = state.borrow();
+    // Don't restore to EOF — next open would show last frame frozen.
+    let position = if s.player.as_ref().map(|p| p.eof_reached()).unwrap_or(false) {
+        0.0
+    } else {
+        pos
+    };
     let session = Session {
         playlist: s.playlist.clone(),
         current_idx: s.current_idx,
-        position: pos,
+        position,
     };
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).ok();
@@ -99,6 +105,8 @@ fn load_playlist(
 
     if play_first {
         if let Some(path) = paths.first().cloned() {
+            // New playlist loaded by the user — cancel any session-restore seek.
+            state.borrow_mut().pending_seek = None;
             if let Some(p) = state.borrow().player.as_ref() {
                 p.execute(PlayerCommand::Open(path)).ok();
             }
@@ -344,13 +352,20 @@ impl MediaWindow {
 
         // ── Session restore ───────────────────────────────────────────────
         if let Some(session) = load_session() {
-            if !session.playlist.is_empty() {
-                // Populate the playlist UI without auto-playing.
-                let paths = session.playlist;
+            // Grab the previously-playing path before consuming the vec.
+            let prev_current = session.current_idx.and_then(|i| session.playlist.get(i).cloned());
+            // Drop files that were moved or deleted since last run.
+            let paths: Vec<PathBuf> = session.playlist.into_iter().filter(|p| p.exists()).collect();
+            if !paths.is_empty() {
+                // Find the new index of the previously-playing file; fall back to 0.
+                let new_idx = prev_current
+                    .as_ref()
+                    .and_then(|orig| paths.iter().position(|p| p == orig))
+                    .or(Some(0));
                 {
                     let mut s = state.borrow_mut();
                     s.playlist = paths.clone();
-                    s.current_idx = session.current_idx;
+                    s.current_idx = new_idx;
                 }
                 for path in &paths {
                     let title = path
@@ -360,13 +375,13 @@ impl MediaWindow {
                         .to_string();
                     playlist.add_item(&title, path);
                 }
-                // Open the last-played file and schedule a seek.
-                if let Some(idx) = session.current_idx {
+                // Defer opening the file until the GL render context is ready.
+                // With vo=libmpv, loadfile before the render context causes mpv
+                // to fail video output init and stay idle.
+                if let Some(idx) = new_idx {
                     if let Some(path) = paths.get(idx).cloned() {
                         playlist.select_row(idx);
-                        if let Some(p) = state.borrow().player.as_ref() {
-                            p.execute(PlayerCommand::Open(path)).ok();
-                        }
+                        state.borrow_mut().pending_open = Some(path);
                         if session.position > 1.0 {
                             state.borrow_mut().pending_seek = Some(session.position);
                         }
@@ -387,6 +402,22 @@ impl MediaWindow {
                     .unwrap_or(0.0);
                 save_session(&state_c, pos);
                 glib::Propagation::Proceed
+            });
+        }
+
+        // ── Fast position timer: seek bar + time labels at 50 ms ─────────
+        {
+            let state_c = state.clone();
+            let controls_c = controls.clone();
+            glib::timeout_add_local(Duration::from_millis(50), move || {
+                let s = state_c.borrow();
+                if let Some(p) = s.player.as_ref() {
+                    let pos = p.position().unwrap_or(0.0);
+                    let dur = p.duration().unwrap_or(0.0);
+                    drop(s);
+                    controls_c.update_position(pos, dur);
+                }
+                glib::ControlFlow::Continue
             });
         }
 
@@ -520,6 +551,8 @@ impl MediaWindow {
 
     pub fn open_file(&self, path: &Path) {
         log::info!("Opening from CLI: {:?}", path);
+        // Cancel any pending session seek — it belongs to the restored file, not this one.
+        self.state.borrow_mut().pending_seek = None;
         if let Some(p) = self.state.borrow().player.as_ref() {
             p.execute(PlayerCommand::Open(path.to_path_buf())).ok();
         }

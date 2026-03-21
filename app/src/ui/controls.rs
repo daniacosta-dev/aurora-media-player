@@ -214,14 +214,8 @@ impl PlayerControls {
         &self.root
     }
 
-    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, idle: bool) {
-        let has_media = !idle;
-        self.play_btn.set_sensitive(has_media);
-        self.prev_btn.set_sensitive(has_media);
-        self.next_btn.set_sensitive(has_media);
-        self.seek_bar.set_sensitive(has_media);
-
-        // Update position without triggering a seek back.
+    /// Called at ~50 ms — only updates the seek bar and time labels.
+    pub fn update_position(&self, pos: f64, dur: f64) {
         self.seek_bar.block_signal(&self.seek_handler);
         if dur > 0.0 {
             self.seek_bar.set_value(pos / dur);
@@ -233,6 +227,17 @@ impl PlayerControls {
             self.remaining
                 .set_label(&format!("-{}", format_time((dur - pos) as u64)));
         }
+    }
+
+    /// Called at ~200 ms — updates buttons and state-driven UI.
+    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, idle: bool) {
+        let has_media = !idle;
+        self.play_btn.set_sensitive(has_media);
+        self.prev_btn.set_sensitive(has_media);
+        self.next_btn.set_sensitive(has_media);
+        self.seek_bar.set_sensitive(has_media);
+
+        self.update_position(pos, dur);
 
         self.play_btn.set_icon_name(if paused {
             "media-playback-start-symbolic"

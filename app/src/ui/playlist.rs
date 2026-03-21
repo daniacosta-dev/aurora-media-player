@@ -276,7 +276,7 @@ impl PlaylistPanel {
             .title("Playlist")
             .build();
 
-        // Row click → play
+        // Row click → play from beginning (cancel any session-restore seek)
         {
             let state_c = state.clone();
             list.connect_row_activated(move |_, row| {
@@ -284,6 +284,7 @@ impl PlaylistPanel {
                 let path = {
                     let mut s = state_c.borrow_mut();
                     s.current_idx = Some(idx);
+                    s.pending_seek = None;
                     s.playlist.get(idx).cloned()
                 };
                 if let Some(path) = path {

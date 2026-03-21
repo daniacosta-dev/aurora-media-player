@@ -13,6 +13,8 @@ pub struct PlayerState {
     pub muted: bool,
     /// When set, the polling loop will seek to this position once the file loads.
     pub pending_seek: Option<f64>,
+    /// File to open once the GL render context is ready (session restore).
+    pub pending_open: Option<PathBuf>,
 }
 
 /// Single-threaded shared handle used throughout the UI tree.
@@ -30,6 +32,7 @@ impl PlayerState {
             current_idx: None,
             muted: false,
             pending_seek: None,
+            pending_open: None,
         }))
     }
 
