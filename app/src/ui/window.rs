@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use adw::{ApplicationWindow, ToolbarView, OverlaySplitView, Breakpoint, BreakpointCondition};
-use gtk4::{self as gtk, Box, Orientation};
+use gtk4::{self as gtk};
 use glib;
 use gio;
 use gdk4;
@@ -142,13 +142,19 @@ impl MediaWindow {
         let playlist = Rc::new(PlaylistPanel::new(state.clone()));
 
         // ── Layout ────────────────────────────────────────────────────────
-        let content = Box::new(Orientation::Vertical, 0);
-        content.append(video.widget());
-        content.append(controls.widget());
+        // Controls float over video so in fullscreen they can hide without
+        // shrinking the video area.
+        controls.widget().set_valign(gtk::Align::End);
+        let video_controls = gtk::Overlay::builder()
+            .child(video.widget())
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        video_controls.add_overlay(controls.widget());
 
         let split_view = OverlaySplitView::builder()
             .sidebar(playlist.widget())
-            .content(&content)
+            .content(&video_controls)
             .sidebar_position(gtk::PackType::End)
             .sidebar_width_fraction(0.28)
             .show_sidebar(false)
@@ -167,6 +173,20 @@ impl MediaWindow {
             .bind_property("active", &split_view, "show-sidebar")
             .sync_create()
             .build();
+
+        // ── Sync maximize button ↔ fullscreen ────────────────────────────
+        // When the user clicks the title-bar restore button while fullscreen,
+        // detect the unmaximize and also exit fullscreen.
+        {
+            let window_c = window.downgrade();
+            window.connect_notify_local(Some("maximized"), move |_, _| {
+                if let Some(win) = window_c.upgrade() {
+                    if !win.property::<bool>("maximized") && win.property::<bool>("fullscreened") {
+                        win.unfullscreen();
+                    }
+                }
+            });
+        }
 
         // ── Breakpoint: collapse sidebar on narrow windows ────────────────
         let bp = Breakpoint::new(BreakpointCondition::parse("max-width: 720sp").unwrap());
@@ -194,16 +214,27 @@ impl MediaWindow {
         }
         window.add_controller(drop_target);
 
-        // ── Double-click on video → fullscreen ────────────────────────────
+        // ── Click on video: single → play/pause, double → fullscreen ─────
         {
             let window_weak = window.downgrade();
+            let state_c = state.clone();
             let dbl_click = gtk::GestureClick::new();
             dbl_click.connect_pressed(move |_, n_press, _, _| {
-                if n_press == 2 {
+                if n_press == 1 {
+                    if let Some(p) = state_c.borrow().player.as_ref() {
+                        p.execute(PlayerCommand::TogglePause).ok();
+                    }
+                } else if n_press == 2 {
+                    // Undo the pause toggle that fired on n_press == 1
+                    if let Some(p) = state_c.borrow().player.as_ref() {
+                        p.execute(PlayerCommand::TogglePause).ok();
+                    }
                     if let Some(win) = window_weak.upgrade() {
-                        if win.is_fullscreen() {
+                        if win.property::<bool>("fullscreened") {
                             win.unfullscreen();
+                            win.unmaximize();
                         } else {
+                            win.maximize();
                             win.fullscreen();
                         }
                     }
@@ -240,9 +271,11 @@ impl MediaWindow {
                     }
                 } else if key == gdk4::Key::f || key == gdk4::Key::F {
                     if let Some(win) = window_weak.upgrade() {
-                        if win.is_fullscreen() {
+                        if win.property::<bool>("fullscreened") {
                             win.unfullscreen();
+                            win.unmaximize();
                         } else {
+                            win.maximize();
                             win.fullscreen();
                         }
                     }
@@ -257,8 +290,9 @@ impl MediaWindow {
                     }
                 } else if key == gdk4::Key::Escape {
                     if let Some(win) = window_weak.upgrade() {
-                        if win.is_fullscreen() {
+                        if win.property::<bool>("fullscreened") {
                             win.unfullscreen();
+                            win.unmaximize();
                         }
                     }
                 } else {
@@ -270,19 +304,39 @@ impl MediaWindow {
         }
 
         // ── Mouse motion → reset auto-hide timer ──────────────────────────
+        // Use a 4-px threshold so sub-pixel jitter from the compositor doesn't
+        // keep resetting the timer when the user's mouse is effectively still.
         let last_motion = Rc::new(Cell::new(Instant::now()));
+        let last_cursor_pos = Rc::new(Cell::new((-999.0f64, -999.0f64)));
         {
             let last_motion_c = last_motion.clone();
+            let last_pos_c = last_cursor_pos.clone();
             let toolbar_view_c = toolbar_view.downgrade();
             let controls_widget_c = controls.widget().downgrade();
+            let split_view_c = split_view.downgrade();
+            let playlist_btn_c = header.playlist_btn.downgrade();
+            let window_c = window.downgrade();
             let motion_ctrl = gtk::EventControllerMotion::new();
-            motion_ctrl.connect_motion(move |_, _, _| {
+            motion_ctrl.connect_motion(move |_, x, y| {
+                let (px, py) = last_pos_c.get();
+                if (x - px).abs() <= 4.0 && (y - py).abs() <= 4.0 {
+                    return; // ignore micro-jitter
+                }
+                last_pos_c.set((x, y));
                 last_motion_c.set(Instant::now());
                 if let Some(tv) = toolbar_view_c.upgrade() {
                     tv.set_reveal_top_bars(true);
                 }
                 if let Some(cw) = controls_widget_c.upgrade() {
                     cw.set_visible(true);
+                }
+                if let Some(sv) = split_view_c.upgrade() {
+                    if let Some(btn) = playlist_btn_c.upgrade() {
+                        sv.set_show_sidebar(btn.is_active());
+                    }
+                }
+                if let Some(win) = window_c.upgrade() {
+                    win.set_cursor(None::<&gdk4::Cursor>);
                 }
             });
             window.add_controller(motion_ctrl);
@@ -340,6 +394,8 @@ impl MediaWindow {
         let window_weak = window.downgrade();
         let toolbar_view_weak = toolbar_view.downgrade();
         let controls_widget_weak = controls.widget().downgrade();
+        let split_view_weak = split_view.downgrade();
+        let playlist_btn_weak = header.playlist_btn.downgrade();
         let state_c = state.clone();
         let controls_c = controls.clone();
         let playlist_c = playlist.clone();
@@ -418,15 +474,23 @@ impl MediaWindow {
             if let Some(win) = window_weak.upgrade() {
                 win.set_title(title.as_deref().or(Some("Aurora Media")));
 
-                if win.is_fullscreen() {
+                if win.property::<bool>("fullscreened") {
                     let idle_secs = last_motion.get().elapsed().as_secs_f64();
-                    if idle_secs > 3.0 {
+                    if idle_secs > 2.0 {
                         if let Some(tv) = toolbar_view_weak.upgrade() {
                             tv.set_reveal_top_bars(false);
                         }
                         if let Some(cw) = controls_widget_weak.upgrade() {
                             cw.set_visible(false);
                         }
+                        if let Some(sv) = split_view_weak.upgrade() {
+                            sv.set_show_sidebar(false);
+                        }
+                        win.set_cursor(
+                            gdk4::Cursor::from_name("none", None::<&gdk4::Cursor>).as_ref(),
+                        );
+                    } else {
+                        win.set_cursor(None::<&gdk4::Cursor>);
                     }
                 } else {
                     if let Some(tv) = toolbar_view_weak.upgrade() {
@@ -435,6 +499,12 @@ impl MediaWindow {
                     if let Some(cw) = controls_widget_weak.upgrade() {
                         cw.set_visible(true);
                     }
+                    if let Some(sv) = split_view_weak.upgrade() {
+                        if let Some(btn) = playlist_btn_weak.upgrade() {
+                            sv.set_show_sidebar(btn.is_active());
+                        }
+                    }
+                    win.set_cursor(None::<&gdk4::Cursor>);
                 }
             }
 

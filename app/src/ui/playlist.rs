@@ -30,6 +30,8 @@ impl PlaylistPanel {
         let header = HeaderBar::builder()
             .title_widget(&gtk::Label::new(Some("Playlist")))
             .show_back_button(false)
+            .show_start_title_buttons(false)
+            .show_end_title_buttons(false)
             .build();
         toolbar.add_top_bar(&header);
 

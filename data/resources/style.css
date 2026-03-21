@@ -2,7 +2,7 @@
 
 .controls-bar {
     padding: 0;
-    background-color: @headerbar_bg_color;
+    background-color: @window_bg_color;
     border-top: 1px solid @borders;
 }
 
