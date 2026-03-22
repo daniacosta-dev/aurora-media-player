@@ -482,7 +482,7 @@ impl MediaWindow {
         let last_known_idx: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
-            let (pos, dur, paused, muted, volume, title, idle, has_video,
+            let (pos, dur, paused, muted, volume, speed, title, idle, has_video,
                  artist, album, eof, pending_seek, repeat_mode) = {
                 let s = state_c.borrow();
                 match s.player.as_ref() {
@@ -493,6 +493,7 @@ impl MediaWindow {
                         p.is_paused(),
                         p.is_muted(),
                         p.volume(),
+                        p.speed(),
                         p.media_title(),
                         p.is_idle(),
                         p.has_video(),
@@ -565,7 +566,7 @@ impl MediaWindow {
                 }
             }
 
-            controls_c.update(pos, dur, paused, muted, volume, idle, repeat_mode);
+            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode);
 
             // ── Update URL playlist row title once mpv/yt-dlp resolves it ─
             if !idle {

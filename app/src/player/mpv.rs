@@ -60,6 +60,21 @@ impl MpvPlayer {
         mpv.set_property("input-default-bindings", false).ok();
         mpv.set_property("input-vo-keyboard", false).ok();
 
+        // Save screenshots to ~/Pictures/Screenshots/Aurora Media Player,
+        // falling back to ~/Pictures/Aurora Media Player if Screenshots doesn't exist.
+        if let Some(pic_dir) = dirs::picture_dir() {
+            let screenshot_dir = {
+                let ss = pic_dir.join("Screenshots");
+                if ss.exists() { ss.join("Aurora Media Player") }
+                else           { pic_dir.join("Aurora Media Player") }
+            };
+            std::fs::create_dir_all(&screenshot_dir).ok();
+            if let Some(dir_str) = screenshot_dir.to_str() {
+                mpv.set_property("screenshot-directory", dir_str).ok();
+                mpv.set_property("screenshot-template", "aurora-%n").ok();
+            }
+        }
+
         Ok(Self { mpv })
     }
 
@@ -206,5 +221,9 @@ impl MpvPlayer {
             .get_property("metadata/by-key/Album")
             .ok()
             .or_else(|| self.mpv.get_property("metadata/by-key/album").ok())
+    }
+
+    pub fn speed(&self) -> f64 {
+        self.mpv.get_property("speed").unwrap_or(1.0)
     }
 }

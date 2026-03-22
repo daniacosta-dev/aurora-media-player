@@ -1,4 +1,4 @@
-use gtk4::{self as gtk, Box, Orientation, Button, Scale, Label, Adjustment};
+use gtk4::{self as gtk, Box, Orientation, Button, Scale, Label, Adjustment, Popover};
 use gtk4::prelude::*;
 use glib;
 
@@ -19,6 +19,8 @@ pub struct PlayerControls {
     remaining: Label,
     /// Blocked during programmatic set_value() to avoid feedback loops.
     seek_handler: glib::SignalHandlerId,
+    screenshot_btn: Button,
+    speed_btn: Button,
 }
 
 impl PlayerControls {
@@ -85,6 +87,55 @@ impl PlayerControls {
             .width_request(90)
             .build();
 
+        // ── Screenshot button ─────────────────────────────────────────────
+        let screenshot_btn = Button::builder()
+            .icon_name("camera-photo-symbolic")
+            .tooltip_text("Take screenshot")
+            .css_classes(vec!["flat"])
+            .build();
+
+        // ── Speed button + popover ────────────────────────────────────────
+        let speed_btn = Button::builder()
+            .label("1×")
+            .tooltip_text("Playback speed")
+            .css_classes(vec!["flat"])
+            .build();
+        let speed_popover = Popover::new();
+        {
+            let speed_box = Box::builder()
+                .orientation(Orientation::Vertical)
+                .spacing(2)
+                .margin_top(4)
+                .margin_bottom(4)
+                .margin_start(4)
+                .margin_end(4)
+                .build();
+            for (lbl, val) in [
+                ("0.25×", 0.25f64), ("0.5×", 0.5), ("0.75×", 0.75),
+                ("1×", 1.0), ("1.25×", 1.25), ("1.5×", 1.5), ("2×", 2.0),
+            ] {
+                let btn = Button::builder()
+                    .label(lbl)
+                    .css_classes(vec!["flat"])
+                    .build();
+                let state_s = state.clone();
+                let popover_s = speed_popover.clone();
+                btn.connect_clicked(move |_| {
+                    if let Some(p) = state_s.borrow().player.as_ref() {
+                        p.execute(PlayerCommand::SetSpeed(val)).ok();
+                    }
+                    popover_s.popdown();
+                });
+                speed_box.append(&btn);
+            }
+            speed_popover.set_child(Some(&speed_box));
+            speed_popover.set_parent(&speed_btn);
+        }
+        {
+            let sp_c = speed_popover.clone();
+            speed_btn.connect_clicked(move |_| { sp_c.popup(); });
+        }
+
         // ── Layout ────────────────────────────────────────────────────────
         let end_row = Box::builder()
             .orientation(Orientation::Horizontal)
@@ -108,6 +159,7 @@ impl PlayerControls {
             .spacing(4)
             .halign(gtk::Align::End)
             .build();
+        vol_box.append(&speed_btn);
         vol_box.append(&vol_btn);
         vol_box.append(&vol_slider);
 
@@ -118,6 +170,7 @@ impl PlayerControls {
             .hexpand(true)
             .build();
         left_box.append(&repeat_btn);
+        left_box.append(&screenshot_btn);
 
         end_row.append(&left_box);
         end_row.append(&center_btns);
@@ -126,6 +179,16 @@ impl PlayerControls {
         root.append(&seek_bar);
         root.append(&time_row);
         root.append(&end_row);
+
+        // ── Signal: screenshot ────────────────────────────────────────────
+        {
+            let state_c = state.clone();
+            screenshot_btn.connect_clicked(move |_| {
+                if let Some(p) = state_c.borrow().player.as_ref() {
+                    p.execute(PlayerCommand::Screenshot).ok();
+                }
+            });
+        }
 
         // ── Signal: play/pause ────────────────────────────────────────────
         {
@@ -242,6 +305,8 @@ impl PlayerControls {
             elapsed,
             remaining,
             seek_handler,
+            screenshot_btn,
+            speed_btn,
         }
     }
 
@@ -265,12 +330,13 @@ impl PlayerControls {
     }
 
     /// Called at ~200 ms — updates buttons and state-driven UI.
-    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, idle: bool, repeat: RepeatMode) {
+    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, speed: f64, idle: bool, has_video: bool, repeat: RepeatMode) {
         let has_media = !idle;
         self.play_btn.set_sensitive(has_media);
         self.prev_btn.set_sensitive(has_media);
         self.next_btn.set_sensitive(has_media);
         self.seek_bar.set_sensitive(has_media);
+        self.screenshot_btn.set_visible(has_media && has_video);
 
         self.update_position(pos, dur);
 
@@ -305,6 +371,7 @@ impl PlayerControls {
                 self.repeat_btn.set_opacity(1.0);
             }
         }
+        self.speed_btn.set_label(&format!("{}×", speed));
     }
 }
 
