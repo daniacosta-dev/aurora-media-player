@@ -3,7 +3,7 @@ use std::cell::RefCell;
 
 use adw::{self, HeaderBar};
 use adw::prelude::*;
-use gtk4::{self as gtk, Button, MenuButton, ToggleButton};
+use gtk4::{self as gtk, Button, ToggleButton};
 use gtk4::prelude::*;
 use gio;
 
@@ -48,12 +48,24 @@ impl MediaHeaderBar {
             .build();
         header.pack_end(&playlist_btn);
 
-        // ── Menu button ───────────────────────────────────────────────────
-        let menu_btn = MenuButton::builder()
+        // ── Settings button ───────────────────────────────────────────────
+        let settings_btn = Button::builder()
             .icon_name("open-menu-symbolic")
-            .tooltip_text("Menu")
+            .tooltip_text("Settings")
             .build();
-        header.pack_end(&menu_btn);
+        header.pack_end(&settings_btn);
+
+        // Apply persisted color scheme immediately on construction.
+        let saved_scheme = load_app_settings()
+            .color_scheme
+            .unwrap_or_else(|| "system".into());
+        adw::StyleManager::default().set_color_scheme(adw_scheme(&saved_scheme));
+
+        // ── Wire: settings button → settings dialog ───────────────────────
+        settings_btn.connect_clicked(|btn| {
+            let Some(parent) = btn.root().and_downcast::<gtk::Window>() else { return };
+            show_settings_dialog(&parent);
+        });
 
         // ── Wire: open button → GTK FileDialog (portal-backed) ────────────
         {
@@ -160,6 +172,158 @@ fn write_saved_playlists(saved: &SavedPlaylists) {
     if let Ok(json) = serde_json::to_string_pretty(saved) {
         std::fs::write(path, json).ok();
     }
+}
+
+// ── App settings persistence ──────────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct AppSettings {
+    /// "system" | "light" | "dark"
+    color_scheme: Option<String>,
+}
+
+fn settings_path() -> Option<std::path::PathBuf> {
+    dirs::config_dir().map(|d| d.join("aurora-media").join("settings.json"))
+}
+
+fn load_app_settings() -> AppSettings {
+    let Some(path) = settings_path() else { return Default::default() };
+    let Ok(data) = std::fs::read_to_string(path) else { return Default::default() };
+    serde_json::from_str(&data).unwrap_or_default()
+}
+
+fn save_app_settings(s: &AppSettings) {
+    let Some(path) = settings_path() else { return };
+    if let Some(dir) = path.parent() { std::fs::create_dir_all(dir).ok(); }
+    if let Ok(json) = serde_json::to_string_pretty(s) {
+        std::fs::write(path, json).ok();
+    }
+}
+
+fn adw_scheme(key: &str) -> adw::ColorScheme {
+    match key {
+        "light" => adw::ColorScheme::ForceLight,
+        "dark"  => adw::ColorScheme::ForceDark,
+        _       => adw::ColorScheme::Default,
+    }
+}
+
+// ── Settings dialog ───────────────────────────────────────────────────────────
+
+fn show_settings_dialog(parent: &gtk::Window) {
+    let dialog = adw::Window::builder()
+        .title("Settings")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(520)
+        .default_height(520)
+        .build();
+
+    let header = adw::HeaderBar::new();
+
+    // ── Appearance section ────────────────────────────────────────────────
+    let appearance_lbl = gtk::Label::builder()
+        .label("Appearance")
+        .halign(gtk::Align::Start)
+        .css_classes(["heading"])
+        .margin_top(18)
+        .margin_bottom(6)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let theme_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let saved_scheme = load_app_settings()
+        .color_scheme
+        .unwrap_or_else(|| "system".into());
+
+    let mk_row = |title: &str, key: &str| -> (adw::ActionRow, gtk::CheckButton) {
+        let row = adw::ActionRow::builder()
+            .title(title)
+            .activatable(true)
+            .build();
+        let check = gtk::CheckButton::builder()
+            .active(saved_scheme == key)
+            .valign(gtk::Align::Center)
+            .build();
+        row.add_suffix(&check);
+        row.set_activatable_widget(Some(&check));
+        (row, check)
+    };
+
+    let (row_system, check_system) = mk_row("Follow system", "system");
+    let (row_light,  check_light)  = mk_row("Light", "light");
+    let (row_dark,   check_dark)   = mk_row("Dark",  "dark");
+
+    check_light.set_group(Some(&check_system));
+    check_dark.set_group(Some(&check_system));
+
+    theme_list.append(&row_system);
+    theme_list.append(&row_light);
+    theme_list.append(&row_dark);
+
+    // ── Footer ────────────────────────────────────────────────────────────
+    let footer = gtk::Label::builder()
+        .use_markup(true)
+        .wrap(true)
+        .max_width_chars(36)
+        .justify(gtk::Justification::Center)
+        .css_classes(["caption", "dim-label"])
+        .halign(gtk::Align::Center)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    footer.set_markup(
+        "If you like Aurora Media Player, consider\n<a href=\"https://github.com/daniacosta-dev/aurora-media-player\">⭐ starring it on GitHub</a>"
+    );
+
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    content.append(&appearance_lbl);
+    content.append(&theme_list);
+    content.append(&footer);
+
+    let scroll = gtk::ScrolledWindow::builder()
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&content)
+        .build();
+
+    let toolbar_view = adw::ToolbarView::new();
+    toolbar_view.add_top_bar(&header);
+    toolbar_view.set_content(Some(&scroll));
+    dialog.set_content(Some(&toolbar_view));
+
+    // Wire radio buttons → StyleManager + persistence
+    check_system.connect_toggled(|btn| {
+        if btn.is_active() {
+            adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
+            save_app_settings(&AppSettings { color_scheme: Some("system".into()) });
+        }
+    });
+    check_light.connect_toggled(|btn| {
+        if btn.is_active() {
+            adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight);
+            save_app_settings(&AppSettings { color_scheme: Some("light".into()) });
+        }
+    });
+    check_dark.connect_toggled(|btn| {
+        if btn.is_active() {
+            adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+            save_app_settings(&AppSettings { color_scheme: Some("dark".into()) });
+        }
+    });
+
+    dialog.present();
 }
 
 // ── URL playlist dialog ───────────────────────────────────────────────────────
