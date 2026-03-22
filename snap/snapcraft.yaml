@@ -24,9 +24,12 @@ apps:
       - removable-media  # USB drives, external disks
       - opengl           # GPU decoding (vaapi) + OpenGL render API
       - unity7           # Session D-Bus access for MPRIS
+      - network          # HTTP/HTTPS streams and URL playback
     environment:
       # Prefer hardware-accelerated decoding; mpv falls back gracefully.
       LIBVA_DRIVER_NAME: ""
+      # Make the bundled yt-dlp binary visible to mpv's ytdl_hook script.
+      PATH: $SNAP/usr/bin:$PATH
 
 parts:
   aurora-media:
@@ -57,3 +60,14 @@ parts:
       # App icon
       install -Dm644 data/icons/hicolor/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg \
         "$CRAFT_PART_INSTALL/share/icons/hicolor/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg"
+
+  yt-dlp:
+    plugin: nil
+    override-pull: |
+      curl -fsSL \
+        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" \
+        -o "$CRAFT_PART_SRC/yt-dlp"
+    override-build: |
+      install -Dm755 "$CRAFT_PART_SRC/yt-dlp" "$CRAFT_PART_INSTALL/usr/bin/yt-dlp"
+    build-packages:
+      - curl

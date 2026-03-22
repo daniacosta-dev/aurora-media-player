@@ -19,6 +19,7 @@ pub enum PlaybackState {
 #[derive(Debug, Clone)]
 pub enum PlayerCommand {
     Open(std::path::PathBuf),
+    OpenUrl(String),
     Play,
     Pause,
     TogglePause,

@@ -46,6 +46,14 @@ impl MpvPlayer {
         mpv.set_property("hwdec", "auto-safe").ok();
         mpv.set_property("volume", 100.0_f64).ok();
         mpv.set_property("keep-open", "yes").ok();
+        mpv.set_property("ytdl", true).ok();
+        // When running inside a snap, point mpv to the bundled yt-dlp binary
+        // explicitly so it doesn't search PATH (which may not include $SNAP/usr/bin).
+        if let Ok(snap) = std::env::var("SNAP") {
+            let ytdl_path = format!("{}/usr/bin/yt-dlp", snap);
+            let opts = format!("ytdl_hook-ytdl_path={}", ytdl_path);
+            mpv.set_property("script-opts", opts.as_str()).ok();
+        }
 
         // Disable mpv's built-in OSD/input — we build our own.
         mpv.set_property("osc", false).ok();
@@ -68,6 +76,10 @@ impl MpvPlayer {
             PlayerCommand::Open(path) => {
                 let path_str = path.to_str().ok_or_else(|| anyhow::anyhow!("non-UTF8 path"))?;
                 mpv_command_array(self.mpv.ctx.as_ptr(), &["loadfile", path_str, "replace"])?;
+                self.mpv.set_property("pause", false).ok();
+            }
+            PlayerCommand::OpenUrl(url) => {
+                mpv_command_array(self.mpv.ctx.as_ptr(), &["loadfile", &url, "replace"])?;
                 self.mpv.set_property("pause", false).ok();
             }
             PlayerCommand::Play => {
@@ -159,6 +171,15 @@ impl MpvPlayer {
         self.mpv
             .get_property::<bool>("idle-active")
             .unwrap_or(true)
+    }
+
+    /// Returns the last playback error string, if any.
+    /// mpv resets this when a new file loads successfully.
+    pub fn last_error(&self) -> Option<String> {
+        self.mpv
+            .get_property::<String>("error-string")
+            .ok()
+            .filter(|s| !s.is_empty() && s != "(empty)")
     }
 
     /// Returns true when the current file has a real video track.

@@ -369,4 +369,26 @@ impl PlaylistPanel {
             row.grab_focus();
         }
     }
+
+    /// Update the display title of a row (used to replace a URL placeholder
+    /// with the real title once mpv/yt-dlp resolves it).
+    pub fn update_row_title(&self, idx: usize, title: &str) {
+        if let Some(row) = self.list.row_at_index(idx as i32) {
+            if let Some(content) = row.child().and_downcast::<gtk::Box>() {
+                let mut child = content.first_child();
+                while let Some(widget) = child {
+                    if let Ok(label) = widget.clone().downcast::<Label>() {
+                        if label.has_css_class("playlist-title") {
+                            label.set_label(title);
+                            break;
+                        }
+                    }
+                    child = widget.next_sibling();
+                }
+            }
+            if let Some(item) = self.items.borrow_mut().get_mut(idx) {
+                item.0 = title.to_string();
+            }
+        }
+    }
 }

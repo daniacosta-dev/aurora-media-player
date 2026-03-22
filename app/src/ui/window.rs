@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
-use adw::{ApplicationWindow, ToolbarView, OverlaySplitView, Breakpoint, BreakpointCondition};
+use adw::{ApplicationWindow, Toast, ToastOverlay, ToolbarView, OverlaySplitView, Breakpoint, BreakpointCondition};
 use gtk4::{self as gtk};
 use glib;
 use gio;
@@ -68,6 +68,24 @@ fn save_session(state: &SharedState, pos: f64) {
 
 /// Sort `paths` in natural order, update `state.playlist`, and populate the
 /// playlist UI.  If `play_first` is true, open the first file automatically.
+/// Extract a human-readable display title from a path or URL.
+/// For URLs: returns the hostname (e.g. "youtube.com") as a loading placeholder.
+/// For file paths: returns the file stem (e.g. "My Video").
+fn title_for_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix("https://").or_else(|| s.strip_prefix("http://")) {
+        rest.split('/').next()
+            .and_then(|host| host.split('?').next())
+            .unwrap_or("URL")
+            .to_string()
+    } else {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_string()
+    }
+}
+
 fn load_playlist(
     paths: Vec<PathBuf>,
     state: &SharedState,
@@ -75,18 +93,25 @@ fn load_playlist(
     play_first: bool,
 ) {
     let mut paths = paths;
-    paths.sort_by(|a, b| {
-        a.file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase()
-            .cmp(
-                &b.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_lowercase(),
-            )
-    });
+
+    // Sort only file-path playlists; URL playlists preserve user-defined order.
+    let is_url_playlist = paths.first()
+        .map(|p| { let s = p.to_string_lossy(); s.starts_with("http://") || s.starts_with("https://") })
+        .unwrap_or(false);
+    if !is_url_playlist {
+        paths.sort_by(|a, b| {
+            a.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase()
+                .cmp(
+                    &b.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_lowercase(),
+                )
+        });
+    }
 
     {
         let mut s = state.borrow_mut();
@@ -96,11 +121,7 @@ fn load_playlist(
 
     playlist_ui.clear();
     for path in &paths {
-        let title = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("?")
-            .to_string();
+        let title = title_for_path(path);
         playlist_ui.add_item(&title, path);
     }
 
@@ -108,6 +129,7 @@ fn load_playlist(
         if let Some(path) = paths.first().cloned() {
             // New playlist loaded by the user — cancel any session-restore seek.
             state.borrow_mut().pending_seek = None;
+            playlist_ui.select_row(0);
             if let Some(p) = state.borrow().player.as_ref() {
                 p.execute(PlayerCommand::Open(path)).ok();
             }
@@ -150,10 +172,20 @@ impl MediaWindow {
             .build();
 
         // ── UI components ─────────────────────────────────────────────────
-        let header = MediaHeaderBar::new(state.clone());
+        // Playlist is created first so it can be referenced in the header callback.
+        let playlist = Rc::new(PlaylistPanel::new(state.clone()));
         let video = VideoArea::new(state.clone());
         let controls = Rc::new(PlayerControls::new(state.clone()));
-        let playlist = Rc::new(PlaylistPanel::new(state.clone()));
+        let header = {
+            let state_c = state.clone();
+            let playlist_c = playlist.clone();
+            MediaHeaderBar::new(state.clone(), move |urls: Vec<String>| {
+                let paths: Vec<std::path::PathBuf> =
+                    urls.into_iter().map(std::path::PathBuf::from).collect();
+                state_c.borrow_mut().pending_seek = None;
+                load_playlist(paths, &state_c, &playlist_c, true);
+            })
+        };
 
         // ── Layout ────────────────────────────────────────────────────────
         // Controls float over video so in fullscreen they can hide without
@@ -179,7 +211,9 @@ impl MediaWindow {
             .build();
         toolbar_view.add_top_bar(header.widget());
 
-        window.set_content(Some(&toolbar_view));
+        let toast_overlay = ToastOverlay::new();
+        toast_overlay.set_child(Some(&toolbar_view));
+        window.set_content(Some(&toast_overlay));
 
         // ── Playlist toggle ───────────────────────────────────────────────
         header
@@ -439,8 +473,13 @@ impl MediaWindow {
         let video_c = Rc::new(video);
         let mpris_c = mpris.clone();
         let mpris_cmd_rx_c = mpris_cmd_rx.clone();
+        let toast_overlay_c = toast_overlay.clone();
         // Cooldown counter to avoid double-advancing when eof is briefly still true.
         let advance_cooldown = Rc::new(Cell::new(0u32));
+        // Track previous idle state to detect unexpected stops (playback errors).
+        let prev_idle = Rc::new(Cell::new(true));
+        // Track current_idx so any external change (prev/next buttons) syncs the playlist UI.
+        let last_known_idx: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
             let (pos, dur, paused, muted, volume, title, idle, has_video,
@@ -465,6 +504,34 @@ impl MediaWindow {
                     ),
                 }
             };
+
+            // ── Playback error detection ────────────────────────────────
+            // If playback was active and suddenly becomes idle (not due to
+            // EOF), mpv likely failed to open the source. Show a toast.
+            let was_idle = prev_idle.get();
+            if !was_idle && idle && !eof {
+                let err_msg = state_c
+                    .borrow()
+                    .player
+                    .as_ref()
+                    .and_then(|p| p.last_error())
+                    .unwrap_or_else(|| "Could not open the media source.".into());
+                toast_overlay_c.add_toast(Toast::new(&err_msg));
+            }
+            prev_idle.set(idle);
+
+            // ── Sync playlist selection with current_idx ────────────────
+            // Handles prev/next button clicks in controls.rs which update
+            // state.current_idx but don't have access to PlaylistPanel.
+            {
+                let cur_idx = state_c.borrow().current_idx;
+                if cur_idx != last_known_idx.get() {
+                    if let Some(idx) = cur_idx {
+                        playlist_c.select_row(idx);
+                    }
+                    last_known_idx.set(cur_idx);
+                }
+            }
 
             // ── Pending seek (session restore) ─────────────────────────
             if let Some(seek_to) = pending_seek {
@@ -499,6 +566,18 @@ impl MediaWindow {
             }
 
             controls_c.update(pos, dur, paused, muted, volume, idle, repeat_mode);
+
+            // ── Update URL playlist row title once mpv/yt-dlp resolves it ─
+            if !idle {
+                if let (Some(real_title), Some(idx)) = (title.as_deref(), state_c.borrow().current_idx) {
+                    let is_url = state_c.borrow().playlist.get(idx)
+                        .map(|p| { let s = p.to_string_lossy(); s.starts_with("http://") || s.starts_with("https://") })
+                        .unwrap_or(false);
+                    if is_url {
+                        playlist_c.update_row_title(idx, real_title);
+                    }
+                }
+            }
 
             if idle {
                 video_c.set_idle(true);
@@ -536,15 +615,24 @@ impl MediaWindow {
                         win.set_cursor(None::<&gdk4::Cursor>);
                     }
                 } else {
+                    // Header always visible outside fullscreen (it's the window chrome).
                     if let Some(tv) = toolbar_view_weak.upgrade() {
                         tv.set_reveal_top_bars(true);
                     }
-                    if let Some(cw) = controls_widget_weak.upgrade() {
-                        cw.set_visible(true);
-                    }
-                    if let Some(sv) = split_view_weak.upgrade() {
-                        if let Some(btn) = playlist_btn_weak.upgrade() {
-                            sv.set_show_sidebar(btn.is_active());
+                    // Hide bottom controls after 2s of inactivity, same as fullscreen.
+                    let idle_secs = last_motion.get().elapsed().as_secs_f64();
+                    if idle_secs > 2.0 && !idle {
+                        if let Some(cw) = controls_widget_weak.upgrade() {
+                            cw.set_visible(false);
+                        }
+                    } else {
+                        if let Some(cw) = controls_widget_weak.upgrade() {
+                            cw.set_visible(true);
+                        }
+                        if let Some(sv) = split_view_weak.upgrade() {
+                            if let Some(btn) = playlist_btn_weak.upgrade() {
+                                sv.set_show_sidebar(btn.is_active());
+                            }
                         }
                     }
                     win.set_cursor(None::<&gdk4::Cursor>);
