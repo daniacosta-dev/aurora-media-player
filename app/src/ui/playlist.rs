@@ -370,6 +370,11 @@ impl PlaylistPanel {
         }
     }
 
+    /// Return the current display title stored for `idx`.
+    pub fn item_title(&self, idx: usize) -> Option<String> {
+        self.items.borrow().get(idx).map(|(t, _)| t.clone())
+    }
+
     /// Update the display title of a row (used to replace a URL placeholder
     /// with the real title once mpv/yt-dlp resolves it).
     pub fn update_row_title(&self, idx: usize, title: &str) {

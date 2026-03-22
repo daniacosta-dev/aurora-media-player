@@ -66,8 +66,6 @@ fn save_session(state: &SharedState, pos: f64) {
 
 // ── Playlist helpers ──────────────────────────────────────────────────────────
 
-/// Sort `paths` in natural order, update `state.playlist`, and populate the
-/// playlist UI.  If `play_first` is true, open the first file automatically.
 /// Extract a human-readable display title from a path or URL.
 /// For URLs: returns the hostname (e.g. "youtube.com") as a loading placeholder.
 /// For file paths: returns the file stem (e.g. "My Video").
@@ -86,6 +84,87 @@ fn title_for_path(path: &Path) -> String {
     }
 }
 
+/// Parse an M3U or M3U8 playlist file and return a list of (title, path) pairs.
+/// Handles `#EXTINF` titles, relative paths, absolute paths, and URLs.
+fn parse_m3u(file_path: &Path) -> Vec<(String, PathBuf)> {
+    let dir = file_path.parent().unwrap_or(Path::new("."));
+    let Ok(content) = std::fs::read_to_string(file_path) else {
+        log::warn!("Could not read M3U file: {:?}", file_path);
+        return vec![];
+    };
+
+    let mut result = Vec::new();
+    let mut pending_title: Option<String> = None;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("#EXTINF:") {
+            // #EXTINF:duration,Title
+            if let Some((_, title)) = rest.split_once(',') {
+                let title = title.trim();
+                if !title.is_empty() {
+                    pending_title = Some(title.to_string());
+                }
+            }
+        } else if line.starts_with('#') {
+            continue; // skip other comments / directives
+        } else {
+            let path = if line.starts_with("http://") || line.starts_with("https://") {
+                PathBuf::from(line)
+            } else {
+                let p = Path::new(line);
+                if p.is_absolute() { p.to_path_buf() } else { dir.join(p) }
+            };
+            let title = pending_title.take().unwrap_or_else(|| title_for_path(&path));
+            result.push((title, path));
+        }
+    }
+    result
+}
+
+/// Returns true if the given path is an M3U/M3U8 playlist.
+fn is_m3u(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase()).as_deref(),
+        Some("m3u") | Some("m3u8")
+    )
+}
+
+/// Load a pre-built list of (title, path) items into the playlist, in order
+/// (no sorting).  If `play_first` is true, open the first item automatically.
+fn load_playlist_items(
+    items: Vec<(String, PathBuf)>,
+    state: &SharedState,
+    playlist_ui: &PlaylistPanel,
+    play_first: bool,
+) {
+    {
+        let mut s = state.borrow_mut();
+        s.playlist = items.iter().map(|(_, p)| p.clone()).collect();
+        s.current_idx = if items.is_empty() { None } else { Some(0) };
+    }
+
+    playlist_ui.clear();
+    for (title, path) in &items {
+        playlist_ui.add_item(title, path);
+    }
+
+    if play_first {
+        if let Some((_, path)) = items.first().cloned() {
+            state.borrow_mut().pending_seek = None;
+            playlist_ui.select_row(0);
+            if let Some(p) = state.borrow().player.as_ref() {
+                p.execute(PlayerCommand::Open(path)).ok();
+            }
+        }
+    }
+}
+
+/// Sort `paths` in natural order, update `state.playlist`, and populate the
+/// playlist UI.  If `play_first` is true, open the first file automatically.
 fn load_playlist(
     paths: Vec<PathBuf>,
     state: &SharedState,
@@ -113,39 +192,25 @@ fn load_playlist(
         });
     }
 
-    {
-        let mut s = state.borrow_mut();
-        s.playlist = paths.clone();
-        s.current_idx = if paths.is_empty() { None } else { Some(0) };
-    }
-
-    playlist_ui.clear();
-    for path in &paths {
-        let title = title_for_path(path);
-        playlist_ui.add_item(&title, path);
-    }
-
-    if play_first {
-        if let Some(path) = paths.first().cloned() {
-            // New playlist loaded by the user — cancel any session-restore seek.
-            state.borrow_mut().pending_seek = None;
-            playlist_ui.select_row(0);
-            if let Some(p) = state.borrow().player.as_ref() {
-                p.execute(PlayerCommand::Open(path)).ok();
-            }
-        }
-    }
+    let items: Vec<(String, PathBuf)> = paths
+        .into_iter()
+        .map(|p| { let t = title_for_path(&p); (t, p) })
+        .collect();
+    load_playlist_items(items, state, playlist_ui, play_first);
 }
 
-/// Resolve a drop target to a list of media paths (handles files + folders).
-fn resolve_drop(path: &Path) -> Vec<PathBuf> {
+/// Resolve a drop target to a list of (title, path) pairs.
+/// Handles files, folders, and M3U playlists.
+fn resolve_drop(path: &Path) -> Vec<(String, PathBuf)> {
     if path.is_dir() {
         scan_directory(path)
             .into_iter()
-            .map(|item| item.path)
+            .map(|item| (title_for_path(&item.path), item.path))
             .collect()
+    } else if is_m3u(path) {
+        parse_m3u(path)
     } else {
-        vec![path.to_path_buf()]
+        vec![(title_for_path(path), path.to_path_buf())]
     }
 }
 
@@ -160,6 +225,16 @@ impl MediaWindow {
 
         // ── Shared player state ───────────────────────────────────────────
         let state = PlayerState::create();
+
+        // ── Restore global volume/mute from settings ──────────────────────
+        {
+            let settings = super::headerbar::load_app_settings();
+            if let Some(p) = state.borrow().player.as_ref() {
+                p.execute(PlayerCommand::SetVolume(settings.volume)).ok();
+                p.execute(PlayerCommand::Mute(settings.muted)).ok();
+            }
+            state.borrow_mut().muted = settings.muted;
+        }
 
         // ── Root window ───────────────────────────────────────────────────
         let window = ApplicationWindow::builder()
@@ -177,15 +252,62 @@ impl MediaWindow {
         let video = VideoArea::new(state.clone());
         let controls = Rc::new(PlayerControls::new(state.clone()));
         let header = {
-            let state_c = state.clone();
-            let playlist_c = playlist.clone();
-            MediaHeaderBar::new(state.clone(), move |urls: Vec<String>| {
-                let paths: Vec<std::path::PathBuf> =
-                    urls.into_iter().map(std::path::PathBuf::from).collect();
-                state_c.borrow_mut().pending_seek = None;
-                load_playlist(paths, &state_c, &playlist_c, true);
-            })
+            let state_file = state.clone();
+            let playlist_file = playlist.clone();
+            let state_url = state.clone();
+            let playlist_url = playlist.clone();
+            let state_sub = state.clone();
+            MediaHeaderBar::new(
+                state.clone(),
+                move |path: PathBuf| {
+                    if is_m3u(&path) {
+                        let items = parse_m3u(&path);
+                        if !items.is_empty() {
+                            load_playlist_items(items, &state_file, &playlist_file, true);
+                        }
+                    } else {
+                        state_file.borrow_mut().pending_seek = None;
+                        if let Some(p) = state_file.borrow().player.as_ref() {
+                            if let Err(e) = p.execute(PlayerCommand::Open(path)) {
+                                log::error!("open file: {e}");
+                            }
+                        }
+                    }
+                },
+                move |items: Vec<(String, String)>| {
+                    let items: Vec<(String, PathBuf)> = items
+                        .into_iter()
+                        .map(|(t, u)| (t, PathBuf::from(u)))
+                        .collect();
+                    state_url.borrow_mut().pending_seek = None;
+                    load_playlist_items(items, &state_url, &playlist_url, true);
+                },
+                move |path: PathBuf| {
+                    if let Some(p) = state_sub.borrow().player.as_ref() {
+                        p.execute(PlayerCommand::AddSubtitle(path)).ok();
+                    }
+                },
+                {
+                    let state_recent = state.clone();
+                    let playlist_recent = playlist.clone();
+                    move |path: PathBuf| {
+                        if is_m3u(&path) {
+                            let items = parse_m3u(&path);
+                            if !items.is_empty() {
+                                load_playlist_items(items, &state_recent, &playlist_recent, true);
+                            }
+                        } else {
+                            state_recent.borrow_mut().pending_seek = None;
+                            if let Some(p) = state_recent.borrow().player.as_ref() {
+                                p.execute(PlayerCommand::Open(path)).ok();
+                            }
+                        }
+                    }
+                },
+            )
         };
+
+        let push_recent = header.push_recent_fn.clone();
 
         // ── Layout ────────────────────────────────────────────────────────
         // Controls float over video so in fullscreen they can hide without
@@ -251,9 +373,9 @@ impl MediaWindow {
             drop_target.connect_drop(move |_, value, _, _| {
                 if let Ok(file) = value.get::<gio::File>() {
                     if let Some(path) = file.path() {
-                        let paths = resolve_drop(&path);
-                        if !paths.is_empty() {
-                            load_playlist(paths, &state_c, &playlist_c, true);
+                        let items = resolve_drop(&path);
+                        if !items.is_empty() {
+                            load_playlist_items(items, &state_c, &playlist_c, true);
                         }
                     }
                 }
@@ -474,16 +596,22 @@ impl MediaWindow {
         let mpris_c = mpris.clone();
         let mpris_cmd_rx_c = mpris_cmd_rx.clone();
         let toast_overlay_c = toast_overlay.clone();
+        let push_recent_c = push_recent.clone();
         // Cooldown counter to avoid double-advancing when eof is briefly still true.
         let advance_cooldown = Rc::new(Cell::new(0u32));
         // Track previous idle state to detect unexpected stops (playback errors).
         let prev_idle = Rc::new(Cell::new(true));
+        // Track volume/mute to persist changes to global settings.
+        let last_saved_volume = Rc::new(Cell::new(super::headerbar::load_app_settings().volume));
+        let last_saved_muted = Rc::new(Cell::new(super::headerbar::load_app_settings().muted));
+        // For URL items, defer the recent-files push until yt-dlp resolves the real title.
+        let recent_pending_idx: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
         // Track current_idx so any external change (prev/next buttons) syncs the playlist UI.
         let last_known_idx: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
             let (pos, dur, paused, muted, volume, speed, title, idle, has_video,
-                 artist, album, eof, pending_seek, repeat_mode) = {
+                 artist, album, eof, pending_seek, repeat_mode, shuffle) = {
                 let s = state_c.borrow();
                 match s.player.as_ref() {
                     None => return glib::ControlFlow::Continue,
@@ -502,6 +630,7 @@ impl MediaWindow {
                         p.eof_reached(),
                         s.pending_seek,
                         s.repeat_mode,
+                        s.shuffle,
                     ),
                 }
             };
@@ -520,6 +649,48 @@ impl MediaWindow {
                 toast_overlay_c.add_toast(Toast::new(&err_msg));
             }
             prev_idle.set(idle);
+
+            // ── Persist volume/mute to global settings when they change ──
+            if (volume - last_saved_volume.get()).abs() > 0.5 || muted != last_saved_muted.get() {
+                last_saved_volume.set(volume);
+                last_saved_muted.set(muted);
+                let mut s = super::headerbar::load_app_settings();
+                s.volume = volume;
+                s.muted = muted;
+                super::headerbar::save_app_settings(&s);
+            }
+
+            // ── Push to recent files when playback starts ───────────────
+            // Local files: push immediately (title is known from the filename).
+            // URL items: mark as pending — defer until yt-dlp resolves the title.
+            if was_idle && !idle {
+                if let Some(idx) = state_c.borrow().current_idx {
+                    let path = state_c.borrow().playlist.get(idx).cloned();
+                    if let Some(ref path) = path {
+                        let path_str = path.to_string_lossy();
+                        if path_str.starts_with("http://") || path_str.starts_with("https://") {
+                            recent_pending_idx.set(Some(idx));
+                        } else {
+                            let display_title = title.as_deref()
+                                .unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or("?"));
+                            push_recent_c(path, display_title);
+                        }
+                    }
+                }
+            }
+
+            // If a pending URL item stops playing before the title resolved, save what we have.
+            if idle && !was_idle {
+                if let Some(pending) = recent_pending_idx.get() {
+                    let path = state_c.borrow().playlist.get(pending).cloned();
+                    if let Some(path) = path {
+                        let best = playlist_c.item_title(pending)
+                            .unwrap_or_else(|| title_for_path(&path));
+                        push_recent_c(&path, &best);
+                    }
+                    recent_pending_idx.set(None);
+                }
+            }
 
             // ── Sync playlist selection with current_idx ────────────────
             // Handles prev/next button clicks in controls.rs which update
@@ -552,8 +723,9 @@ impl MediaWindow {
                     let s = state_c.borrow();
                     s.current_idx
                         .and_then(|i| {
-                            let next = i + 1;
-                            s.playlist.get(next).cloned().map(|p| (next, p))
+                            s.effective_next_idx(i).and_then(|next| {
+                                s.playlist.get(next).cloned().map(|p| (next, p))
+                            })
                         })
                 };
                 if let Some((next_idx, next_path)) = next {
@@ -566,16 +738,65 @@ impl MediaWindow {
                 }
             }
 
-            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode);
+            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle);
+
+            // ── Tracks (audio + subtitles) ──────────────────────────────
+            let tracks = {
+                let s = state_c.borrow();
+                s.player.as_ref().map(|p| p.track_list()).unwrap_or_default()
+            };
+            controls_c.update_tracks(tracks, &state_c);
+
+            // ── Chapter marks on seek bar ───────────────────────────────
+            let chapters = {
+                let s = state_c.borrow();
+                s.player.as_ref().filter(|_| !idle)
+                    .map(|p| p.chapter_list())
+                    .unwrap_or_default()
+            };
+            controls_c.update_chapters(chapters, dur);
 
             // ── Update URL playlist row title once mpv/yt-dlp resolves it ─
+            // Only replace if the title is still the hostname fallback — don't
+            // clobber a proper #EXTINF channel name with mpv stream metadata.
             if !idle {
                 if let (Some(real_title), Some(idx)) = (title.as_deref(), state_c.borrow().current_idx) {
-                    let is_url = state_c.borrow().playlist.get(idx)
-                        .map(|p| { let s = p.to_string_lossy(); s.starts_with("http://") || s.starts_with("https://") })
+                    let still_placeholder = state_c.borrow().playlist.get(idx)
+                        .and_then(|p| {
+                            let path_str = p.to_string_lossy();
+                            // Only applies to URL items — file items don't need title updates.
+                            if !path_str.starts_with("http://") && !path_str.starts_with("https://") {
+                                return None;
+                            }
+                            let fallback = title_for_path(p);
+                            playlist_c.item_title(idx).map(|t| {
+                                // Still a placeholder if:
+                                // 1. hostname fallback ("youtube.com")
+                                // 2. mpv returned the raw full URL before yt-dlp resolved
+                                // 3. mpv returned just the URL path fragment ("watch?v=xxx")
+                                //    which has no spaces and contains a query-string marker
+                                // Real titles (from yt-dlp) have spaces and no URL syntax.
+                                t == fallback
+                                    || t.starts_with("http://")
+                                    || t.starts_with("https://")
+                                    || (t.contains('?') && !t.contains(' '))
+                            })
+                        })
                         .unwrap_or(false);
-                    if is_url {
+                    if still_placeholder {
                         playlist_c.update_row_title(idx, real_title);
+
+                        // If this is the real resolved title (not another URL fragment),
+                        // push to recent now and clear the pending flag.
+                        let title_is_real = !real_title.starts_with("http://")
+                            && !real_title.starts_with("https://")
+                            && !(real_title.contains('?') && !real_title.contains(' '));
+                        if title_is_real && recent_pending_idx.get() == Some(idx) {
+                            if let Some(path) = state_c.borrow().playlist.get(idx).cloned() {
+                                push_recent_c(&path, real_title);
+                                recent_pending_idx.set(None);
+                            }
+                        }
                     }
                 }
             }
@@ -652,7 +873,7 @@ impl MediaWindow {
                         let next = {
                             let s = state_c.borrow();
                             s.current_idx.and_then(|i| {
-                                s.playlist.get(i + 1).cloned().map(|p| (i + 1, p))
+                                s.effective_next_idx(i).and_then(|ni| s.playlist.get(ni).cloned().map(|p| (ni, p)))
                             })
                         };
                         if let Some((idx, path)) = next {

@@ -1,4 +1,7 @@
-use gtk4::{self as gtk, Box, Orientation, Button, Scale, Label, Adjustment, Popover};
+use std::rc::Rc;
+use std::cell::RefCell;
+
+use gtk4::{self as gtk, Box, Orientation, Button, Scale, Label, Adjustment, Popover, DrawingArea, Overlay};
 use gtk4::prelude::*;
 use glib;
 
@@ -12,6 +15,7 @@ pub struct PlayerControls {
     play_btn: Button,
     next_btn: Button,
     repeat_btn: Button,
+    shuffle_btn: Button,
     vol_btn: Button,
     seek_bar: Scale,
     vol_slider: Scale,
@@ -19,8 +23,14 @@ pub struct PlayerControls {
     remaining: Label,
     /// Blocked during programmatic set_value() to avoid feedback loops.
     seek_handler: glib::SignalHandlerId,
+    vol_handler: glib::SignalHandlerId,
     screenshot_btn: Button,
     speed_btn: Button,
+    tracks_btn: Button,
+    tracks_popover: Popover,
+    last_tracks: Rc<RefCell<Vec<crate::player::TrackInfo>>>,
+    chapter_overlay: DrawingArea,
+    chapter_data: Rc<RefCell<(f64, Vec<(String, f64)>)>>,
 }
 
 impl PlayerControls {
@@ -38,6 +48,62 @@ impl PlayerControls {
             .hexpand(true)
             .build();
         seek_bar.add_css_class("seekbar");
+
+        // ── Chapter overlay ───────────────────────────────────────────────
+        let chapter_data: Rc<RefCell<(f64, Vec<(String, f64)>)>> =
+            Rc::new(RefCell::new((0.0, Vec::new())));
+
+        let chapter_overlay = DrawingArea::builder()
+            .can_target(false)
+            .hexpand(true)
+            .build();
+        chapter_overlay.set_valign(gtk::Align::Fill);
+        chapter_overlay.set_halign(gtk::Align::Fill);
+
+        {
+            let data_c = chapter_data.clone();
+            chapter_overlay.set_draw_func(move |widget, cr, _w, _h| {
+                let (dur, chapters) = &*data_c.borrow();
+                if *dur <= 0.0 || chapters.is_empty() { return; }
+                let w = widget.width() as f64;
+                let h = widget.height() as f64;
+                if w <= 0.0 { return; }
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.5);
+                for (_, time) in chapters {
+                    let x = (time / dur) * w;
+                    cr.rectangle(x - 1.0, h - 6.0, 2.0, 6.0);
+                }
+                cr.fill().ok();
+            });
+        }
+
+        // Hover tooltip: show chapter name
+        {
+            let data_c = chapter_data.clone();
+            let seek_bar_c = seek_bar.downgrade();
+            let motion = gtk::EventControllerMotion::new();
+            motion.connect_motion(move |_, x, _| {
+                let Some(sb) = seek_bar_c.upgrade() else { return };
+                let w = sb.width() as f64;
+                if w <= 0.0 { return; }
+                let frac = (x / w).clamp(0.0, 1.0);
+                let (dur, chapters) = &*data_c.borrow();
+                if *dur <= 0.0 || chapters.is_empty() {
+                    sb.set_tooltip_text(None);
+                    return;
+                }
+                let pos_secs = frac * dur;
+                let name = chapters.iter().rev()
+                    .find(|(_, t)| *t <= pos_secs)
+                    .map(|(n, _)| n.as_str());
+                sb.set_tooltip_text(name);
+            });
+            seek_bar.add_controller(motion);
+        }
+
+        let seek_outer = Overlay::new();
+        seek_outer.set_child(Some(&seek_bar));
+        seek_outer.add_overlay(&chapter_overlay);
 
         // ── Time labels ───────────────────────────────────────────────────
         let time_row = Box::builder()
@@ -76,6 +142,14 @@ impl PlayerControls {
             .css_classes(vec!["repeat-btn"])
             .build();
 
+        // ── Shuffle ───────────────────────────────────────────────────────
+        let shuffle_btn = Button::builder()
+            .icon_name("media-playlist-shuffle-symbolic")
+            .css_classes(vec!["shuffle-btn"])
+            .tooltip_text("Shuffle")
+            .build();
+        shuffle_btn.set_opacity(0.35); // inactive by default
+
         // ── Volume ────────────────────────────────────────────────────────
         let vol_btn = Button::builder()
             .icon_name("audio-volume-high-symbolic")
@@ -93,6 +167,19 @@ impl PlayerControls {
             .tooltip_text("Take screenshot")
             .css_classes(vec!["flat"])
             .build();
+
+        // ── Tracks button + popover ───────────────────────────────────────
+        let tracks_btn = Button::builder()
+            .icon_name("media-optical-symbolic")
+            .tooltip_text("Audio & Subtitle tracks")
+            .css_classes(vec!["flat"])
+            .build();
+        let tracks_popover = Popover::new();
+        tracks_popover.set_parent(&tracks_btn);
+        {
+            let tp = tracks_popover.clone();
+            tracks_btn.connect_clicked(move |_| { tp.popup(); });
+        }
 
         // ── Speed button + popover ────────────────────────────────────────
         let speed_btn = Button::builder()
@@ -159,6 +246,7 @@ impl PlayerControls {
             .spacing(4)
             .halign(gtk::Align::End)
             .build();
+        vol_box.append(&tracks_btn);
         vol_box.append(&speed_btn);
         vol_box.append(&vol_btn);
         vol_box.append(&vol_slider);
@@ -170,13 +258,14 @@ impl PlayerControls {
             .hexpand(true)
             .build();
         left_box.append(&repeat_btn);
+        left_box.append(&shuffle_btn);
         left_box.append(&screenshot_btn);
 
         end_row.append(&left_box);
         end_row.append(&center_btns);
         end_row.append(&vol_box);
 
-        root.append(&seek_bar);
+        root.append(&seek_outer);
         root.append(&time_row);
         root.append(&end_row);
 
@@ -253,11 +342,19 @@ impl PlayerControls {
             });
         }
 
+        // ── Signal: shuffle ───────────────────────────────────────────────
+        {
+            let state_c = state.clone();
+            shuffle_btn.connect_clicked(move |_| {
+                let mut s = state_c.borrow_mut();
+                s.shuffle = !s.shuffle;
+                if s.shuffle {
+                    s.rebuild_shuffle_order();
+                }
+            });
+        }
+
         // ── Signal: seek bar ──────────────────────────────────────────────
-        // connect_value_changed fires for user drags, scroll, and keyboard on
-        // the Scale — but NOT when we call set_value() while the signal is
-        // blocked.  mpv discards intermediate seeks during a fast drag, so
-        // sending one per event is fine.
         let seek_handler = {
             let state_c = state.clone();
             seek_bar.connect_value_changed(move |scale| {
@@ -271,14 +368,14 @@ impl PlayerControls {
         };
 
         // ── Signal: volume slider ─────────────────────────────────────────
-        {
+        let vol_handler = {
             let state_c = state.clone();
             vol_slider.connect_value_changed(move |scale| {
                 if let Some(p) = state_c.borrow().player.as_ref() {
                     p.execute(PlayerCommand::SetVolume(scale.value())).ok();
                 }
-            });
-        }
+            })
+        };
 
         // ── Signal: mute ─────────────────────────────────────────────────
         {
@@ -299,14 +396,21 @@ impl PlayerControls {
             play_btn,
             next_btn,
             repeat_btn,
+            shuffle_btn,
             vol_btn,
             seek_bar,
             vol_slider,
             elapsed,
             remaining,
             seek_handler,
+            vol_handler,
             screenshot_btn,
             speed_btn,
+            tracks_btn,
+            tracks_popover,
+            last_tracks: Rc::new(RefCell::new(Vec::new())),
+            chapter_overlay,
+            chapter_data: chapter_data.clone(),
         }
     }
 
@@ -330,7 +434,7 @@ impl PlayerControls {
     }
 
     /// Called at ~200 ms — updates buttons and state-driven UI.
-    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, speed: f64, idle: bool, has_video: bool, repeat: RepeatMode) {
+    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, speed: f64, idle: bool, has_video: bool, repeat: RepeatMode, shuffle: bool) {
         let has_media = !idle;
         self.play_btn.set_sensitive(has_media);
         self.prev_btn.set_sensitive(has_media);
@@ -345,6 +449,10 @@ impl PlayerControls {
         } else {
             "media-playback-pause-symbolic"
         });
+
+        self.vol_slider.block_signal(&self.vol_handler);
+        self.vol_slider.set_value(volume);
+        self.vol_slider.unblock_signal(&self.vol_handler);
 
         self.vol_btn.set_icon_name(if muted || volume == 0.0 {
             "audio-volume-muted-symbolic"
@@ -372,6 +480,161 @@ impl PlayerControls {
             }
         }
         self.speed_btn.set_label(&format!("{}×", speed));
+        self.shuffle_btn.set_opacity(if shuffle { 1.0 } else { 0.35 });
+    }
+
+    pub fn update_tracks(&self, tracks: Vec<crate::player::TrackInfo>, state: &SharedState) {
+        {
+            let last = self.last_tracks.borrow();
+            // Compare by (id, kind, selected) to detect changes
+            let unchanged = last.len() == tracks.len()
+                && last.iter().zip(&tracks).all(|(a, b)| {
+                    a.id == b.id && a.kind == b.kind && a.selected == b.selected
+                });
+            if unchanged { return; }
+        }
+        *self.last_tracks.borrow_mut() = tracks.clone();
+
+        // Rebuild popover content
+        let popover_box = Box::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(4)
+            .margin_top(8)
+            .margin_bottom(8)
+            .margin_start(8)
+            .margin_end(8)
+            .build();
+
+        let audio_tracks: Vec<_> = tracks.iter().filter(|t| t.kind == "audio").collect();
+        let sub_tracks: Vec<_> = tracks.iter().filter(|t| t.kind == "sub").collect();
+
+        if !audio_tracks.is_empty() {
+            let lbl = gtk::Label::builder()
+                .label("Audio")
+                .halign(gtk::Align::Start)
+                .css_classes(vec!["heading"])
+                .build();
+            popover_box.append(&lbl);
+
+            let first_check: Rc<RefCell<Option<gtk::CheckButton>>> = Rc::new(RefCell::new(None));
+            for t in &audio_tracks {
+                let label = track_label(t);
+                let check = gtk::CheckButton::builder()
+                    .label(&label)
+                    .active(t.selected)
+                    .build();
+                {
+                    let mut fc = first_check.borrow_mut();
+                    if let Some(ref first) = *fc {
+                        check.set_group(Some(first));
+                    } else {
+                        *fc = Some(check.clone());
+                    }
+                }
+                let id = t.id;
+                let state_c = state.clone();
+                let popover_c = self.tracks_popover.clone();
+                check.connect_toggled(move |btn| {
+                    if btn.is_active() {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(crate::player::PlayerCommand::SetAudioTrack(id)).ok();
+                        }
+                        popover_c.popdown();
+                    }
+                });
+                popover_box.append(&check);
+            }
+        }
+
+        {
+            let lbl = gtk::Label::builder()
+                .label("Subtitles")
+                .halign(gtk::Align::Start)
+                .css_classes(vec!["heading"])
+                .margin_top(if audio_tracks.is_empty() { 0 } else { 8 })
+                .build();
+            popover_box.append(&lbl);
+
+            let first_check: Rc<RefCell<Option<gtk::CheckButton>>> = Rc::new(RefCell::new(None));
+
+            // "Disable" option
+            let none_check = gtk::CheckButton::builder()
+                .label("Disabled")
+                .active(sub_tracks.iter().all(|t| !t.selected))
+                .build();
+            {
+                let mut fc = first_check.borrow_mut();
+                *fc = Some(none_check.clone());
+            }
+            {
+                let state_c = state.clone();
+                let popover_c = self.tracks_popover.clone();
+                none_check.connect_toggled(move |btn| {
+                    if btn.is_active() {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(crate::player::PlayerCommand::SetSubtitleTrack(0)).ok();
+                        }
+                        popover_c.popdown();
+                    }
+                });
+            }
+            popover_box.append(&none_check);
+
+            for t in &sub_tracks {
+                let label = track_label(t);
+                let check = gtk::CheckButton::builder()
+                    .label(&label)
+                    .active(t.selected)
+                    .build();
+                {
+                    let fc = first_check.borrow();
+                    if let Some(ref first) = *fc {
+                        check.set_group(Some(first));
+                    }
+                }
+                let id = t.id;
+                let state_c = state.clone();
+                let popover_c = self.tracks_popover.clone();
+                check.connect_toggled(move |btn| {
+                    if btn.is_active() {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(crate::player::PlayerCommand::SetSubtitleTrack(id)).ok();
+                        }
+                        popover_c.popdown();
+                    }
+                });
+                popover_box.append(&check);
+            }
+        }
+
+        // Visibility: show button only when there are non-video tracks
+        self.tracks_btn.set_visible(!audio_tracks.is_empty() || !sub_tracks.is_empty());
+
+        self.tracks_popover.set_child(Some(&popover_box));
+    }
+
+    pub fn update_chapters(&self, chapters: Vec<(String, f64)>, dur: f64) {
+        let mut data = self.chapter_data.borrow_mut();
+        if data.0 != dur || data.1.len() != chapters.len() {
+            *data = (dur, chapters);
+            drop(data);
+            self.chapter_overlay.queue_draw();
+        }
+    }
+}
+
+fn track_label(t: &crate::player::TrackInfo) -> String {
+    let base = t.title.as_deref()
+        .or(t.lang.as_deref())
+        .unwrap_or("Unknown");
+    if let Some(ref lang) = t.lang {
+        if t.title.is_some() {
+            format!("{} ({})", t.title.as_deref().unwrap_or(""), lang)
+        } else {
+            lang.clone()
+        }
+    } else {
+        base.to_string()
     }
 }
 

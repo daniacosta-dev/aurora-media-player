@@ -17,6 +17,8 @@ pub struct PlayerState {
     /// File to open once the GL render context is ready (session restore).
     pub pending_open: Option<PathBuf>,
     pub repeat_mode: RepeatMode,
+    pub shuffle: bool,
+    pub shuffle_order: Vec<usize>,
 }
 
 /// Single-threaded shared handle used throughout the UI tree.
@@ -36,7 +38,45 @@ impl PlayerState {
             pending_seek: None,
             pending_open: None,
             repeat_mode: RepeatMode::default(),
+            shuffle: false,
+            shuffle_order: Vec::new(),
         }))
+    }
+
+    /// Fisher-Yates shuffle using a simple LCG (no external rand dependency).
+    pub fn rebuild_shuffle_order(&mut self) {
+        let n = self.playlist.len();
+        if n == 0 { self.shuffle_order.clear(); return; }
+        let mut order: Vec<usize> = (0..n).collect();
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as u64)
+            .unwrap_or(12345);
+        let mut rng = seed.wrapping_add(1);
+        for i in (1..n).rev() {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let j = ((rng >> 33) as usize) % (i + 1);
+            order.swap(i, j);
+        }
+        // Keep current track at the front of the shuffle
+        if let Some(cur) = self.current_idx {
+            if let Some(pos) = order.iter().position(|&x| x == cur) {
+                order.remove(pos);
+                order.insert(0, cur);
+            }
+        }
+        self.shuffle_order = order;
+    }
+
+    /// Returns the effective next playlist index, respecting shuffle order.
+    pub fn effective_next_idx(&self, current: usize) -> Option<usize> {
+        if !self.shuffle {
+            let next = current + 1;
+            if next < self.playlist.len() { Some(next) } else { None }
+        } else {
+            let pos = self.shuffle_order.iter().position(|&x| x == current)?;
+            self.shuffle_order.get(pos + 1).copied()
+        }
     }
 
     /// Path to the session file in the user data directory.

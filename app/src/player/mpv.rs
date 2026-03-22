@@ -23,6 +23,15 @@ fn mpv_command_array(ctx: *mut libmpv_sys::mpv_handle, args: &[&str]) -> Result<
     Ok(())
 }
 
+#[derive(Clone)]
+pub struct TrackInfo {
+    pub id: i64,
+    pub kind: String,   // "audio" | "sub" | "video"
+    pub title: Option<String>,
+    pub lang: Option<String>,
+    pub selected: bool,
+}
+
 pub struct MpvPlayer {
     pub(crate) mpv: Mpv,
 }
@@ -132,6 +141,20 @@ impl MpvPlayer {
             PlayerCommand::Screenshot => {
                 self.mpv.command("screenshot", &[]).ok();
             }
+            PlayerCommand::SetAudioTrack(id) => {
+                self.mpv.set_property("aid", id).ok();
+            }
+            PlayerCommand::SetSubtitleTrack(id) => {
+                if id == 0 {
+                    self.mpv.set_property("sid", "no").ok();
+                } else {
+                    self.mpv.set_property("sid", id).ok();
+                }
+            }
+            PlayerCommand::AddSubtitle(path) => {
+                let path_str = path.to_str().ok_or_else(|| anyhow::anyhow!("non-UTF8 path"))?;
+                mpv_command_array(self.mpv.ctx.as_ptr(), &["sub-add", path_str, "select"])?;
+            }
             PlayerCommand::SetRepeat(mode) => match mode {
                 RepeatMode::None => {
                     self.mpv.set_property("loop-playlist", "no").ok();
@@ -225,5 +248,27 @@ impl MpvPlayer {
 
     pub fn speed(&self) -> f64 {
         self.mpv.get_property("speed").unwrap_or(1.0)
+    }
+
+    pub fn track_list(&self) -> Vec<TrackInfo> {
+        let count: i64 = self.mpv.get_property("track-list/count").unwrap_or(0);
+        (0..count).filter_map(|i| {
+            let kind: String = self.mpv.get_property::<String>(&format!("track-list/{i}/type")).ok()?;
+            let id: i64 = self.mpv.get_property(&format!("track-list/{i}/id")).unwrap_or(0);
+            let title: Option<String> = self.mpv.get_property(&format!("track-list/{i}/title")).ok();
+            let lang: Option<String> = self.mpv.get_property(&format!("track-list/{i}/lang")).ok();
+            let selected: bool = self.mpv.get_property(&format!("track-list/{i}/selected")).unwrap_or(false);
+            Some(TrackInfo { id, kind, title, lang, selected })
+        }).collect()
+    }
+
+    pub fn chapter_list(&self) -> Vec<(String, f64)> {
+        let count: i64 = self.mpv.get_property("chapter-list/count").unwrap_or(0);
+        (0..count).map(|i| {
+            let title: String = self.mpv.get_property::<String>(&format!("chapter-list/{i}/title"))
+                .unwrap_or_else(|_| format!("Chapter {}", i + 1));
+            let time: f64 = self.mpv.get_property(&format!("chapter-list/{i}/time")).unwrap_or(0.0);
+            (title, time)
+        }).collect()
     }
 }
