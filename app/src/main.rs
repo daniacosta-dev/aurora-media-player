@@ -1,4 +1,5 @@
 mod app;
+mod mpris;
 mod player;
 mod state;
 mod ui;
@@ -33,7 +34,7 @@ fn install_dev_assets() {
     std::fs::create_dir_all(&icon_dir).ok();
     std::fs::copy(
         &icon_src,
-        icon_dir.join("io.github.aurora.MediaPlayer.svg"),
+        icon_dir.join("io.github.daniacosta_dev.AuroraMediaPlayer.svg"),
     )
     .ok();
 
@@ -42,11 +43,11 @@ fn install_dev_assets() {
     let apps_dir = data_dir.join("applications");
     std::fs::create_dir_all(&apps_dir).ok();
     std::fs::write(
-        apps_dir.join("io.github.aurora.MediaPlayer.desktop"),
+        apps_dir.join("io.github.daniacosta_dev.AuroraMediaPlayer.desktop"),
         "[Desktop Entry]\n\
          Name=Aurora Media Player\n\
          Exec=aurora-media %U\n\
-         Icon=io.github.aurora.MediaPlayer\n\
+         Icon=io.github.daniacosta_dev.AuroraMediaPlayer\n\
          Type=Application\n\
          MimeType=video/mp4;video/x-matroska;audio/mpeg;audio/flac;\n",
     )

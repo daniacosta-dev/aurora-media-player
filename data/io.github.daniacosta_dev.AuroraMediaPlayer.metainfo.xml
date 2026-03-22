@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.daniacosta_dev.MediaPlayer</id>
+
+  <name>Aurora Media Player</name>
+  <summary>Modern media player for GNOME</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      Aurora Media Player is a modern, clean media player for GNOME built with
+      GTK4 and libadwaita. Powered by mpv, it supports virtually all video and
+      audio formats with high-quality hardware-accelerated playback.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Plays all common video formats: MP4, MKV, AVI, MOV, WebM and more</li>
+      <li>Plays all common audio formats: MP3, FLAC, OGG, Opus, AAC and more</li>
+      <li>Playlist management with drag-and-drop reordering</li>
+      <li>Repeat modes: none, repeat playlist, repeat one</li>
+      <li>Session restore — resumes where you left off</li>
+      <li>Animated waveform visualizer for audio playback</li>
+      <li>Auto-hiding controls in fullscreen</li>
+      <li>Hardware-accelerated decoding via VA-API</li>
+    </ul>
+  </description>
+
+  <developer id="io.github.daniacosta_dev">
+    <name>Daniel Acosta</name>
+  </developer>
+
+  <url type="homepage">https://github.com/daniacosta-dev/aurora-media-player</url>
+  <url type="bugtracker">https://github.com/daniacosta-dev/aurora-media-player/issues</url>
+
+  <launchable type="desktop-id">io.github.daniacosta_dev.MediaPlayer.desktop</launchable>
+
+  <provides>
+    <binary>aurora-media</binary>
+  </provides>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+    <category>Audio</category>
+    <category>Player</category>
+    <category>GTK</category>
+  </categories>
+
+  <keywords>
+    <keyword>media</keyword>
+    <keyword>player</keyword>
+    <keyword>video</keyword>
+    <keyword>audio</keyword>
+    <keyword>mpv</keyword>
+    <keyword>music</keyword>
+  </keywords>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.1.0" date="2025-01-01">
+      <description>
+        <p>Initial release of Aurora Media Player.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -24,6 +24,8 @@ log.workspace = true
 env_logger.workspace = true
 anyhow.workspace = true
 libc.workspace = true
+zbus.workspace = true
+tokio.workspace = true
 
 [build-dependencies]
 glib-build-tools = "0.20"

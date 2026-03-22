@@ -7,7 +7,7 @@ use gdk4::Display;
 
 use crate::ui::window::MediaWindow;
 
-const APP_ID: &str = "io.github.aurora.MediaPlayer";
+const APP_ID: &str = "io.github.daniacosta_dev.AuroraMediaPlayer";
 
 // Embed and register the compiled gresource bundle at startup.
 fn init_resources() {
@@ -17,7 +17,7 @@ fn init_resources() {
 
 fn load_css() {
     let provider = gtk::CssProvider::new();
-    provider.load_from_resource("/io/github/aurora/MediaPlayer/style.css");
+    provider.load_from_resource("/io/github/daniacosta_dev/AuroraMediaPlayer/style.css");
     if let Some(display) = Display::default() {
         gtk::StyleContext::add_provider_for_display(
             &display,

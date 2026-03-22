@@ -11,8 +11,9 @@ use gio;
 use gdk4;
 
 use crate::library::scan_directory;
+use crate::mpris::{MprisCommand, MprisState};
+use crate::player::{PlayerCommand, RepeatMode};
 use crate::state::{PlayerState, SharedState};
-use crate::player::PlayerCommand;
 
 use super::{
     headerbar::MediaHeaderBar,
@@ -130,6 +131,11 @@ fn resolve_drop(path: &Path) -> Vec<PathBuf> {
 
 impl MediaWindow {
     pub fn new(app: &adw::Application) -> Self {
+        // ── MPRIS server (background thread) ──────────────────────────────
+        let (mpris, mpris_cmd_rx) = crate::mpris::spawn();
+        let mpris = Rc::new(mpris);
+        let mpris_cmd_rx = Rc::new(mpris_cmd_rx);
+
         // ── Shared player state ───────────────────────────────────────────
         let state = PlayerState::create();
 
@@ -431,6 +437,8 @@ impl MediaWindow {
         let controls_c = controls.clone();
         let playlist_c = playlist.clone();
         let video_c = Rc::new(video);
+        let mpris_c = mpris.clone();
+        let mpris_cmd_rx_c = mpris_cmd_rx.clone();
         // Cooldown counter to avoid double-advancing when eof is briefly still true.
         let advance_cooldown = Rc::new(Cell::new(0u32));
 
@@ -541,6 +549,102 @@ impl MediaWindow {
                     }
                     win.set_cursor(None::<&gdk4::Cursor>);
                 }
+            }
+
+            // ── MPRIS: drain incoming commands ─────────────────────────
+            while let Ok(cmd) = mpris_cmd_rx_c.try_recv() {
+                match cmd {
+                    MprisCommand::PlayPause => {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(PlayerCommand::TogglePause).ok();
+                        }
+                    }
+                    MprisCommand::Next => {
+                        let next = {
+                            let s = state_c.borrow();
+                            s.current_idx.and_then(|i| {
+                                s.playlist.get(i + 1).cloned().map(|p| (i + 1, p))
+                            })
+                        };
+                        if let Some((idx, path)) = next {
+                            state_c.borrow_mut().current_idx = Some(idx);
+                            playlist_c.select_row(idx);
+                            if let Some(p) = state_c.borrow().player.as_ref() {
+                                p.execute(PlayerCommand::Open(path)).ok();
+                            }
+                            advance_cooldown.set(5);
+                        }
+                    }
+                    MprisCommand::Previous => {
+                        let prev = {
+                            let s = state_c.borrow();
+                            s.current_idx.and_then(|i| {
+                                if i > 0 {
+                                    s.playlist.get(i - 1).cloned().map(|p| (i - 1, p))
+                                } else {
+                                    None
+                                }
+                            })
+                        };
+                        if let Some((idx, path)) = prev {
+                            state_c.borrow_mut().current_idx = Some(idx);
+                            playlist_c.select_row(idx);
+                            if let Some(p) = state_c.borrow().player.as_ref() {
+                                p.execute(PlayerCommand::Open(path)).ok();
+                            }
+                            advance_cooldown.set(5);
+                        }
+                    }
+                    MprisCommand::Seek(offset_us) => {
+                        let s = state_c.borrow();
+                        if let Some(p) = s.player.as_ref() {
+                            let new_pos = (p.position().unwrap_or(0.0)
+                                + offset_us as f64 / 1_000_000.0)
+                                .max(0.0)
+                                .min(p.duration().unwrap_or(f64::MAX));
+                            p.execute(PlayerCommand::Seek(new_pos)).ok();
+                        }
+                    }
+                    MprisCommand::SetVolume(v) => {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(PlayerCommand::SetVolume(v * 100.0)).ok();
+                        }
+                    }
+                }
+            }
+
+            // ── MPRIS: push current state ───────────────────────────────
+            {
+                let (can_next, can_prev) = {
+                    let s = state_c.borrow();
+                    let n = s.playlist.len();
+                    let i = s.current_idx.unwrap_or(0);
+                    (i + 1 < n, i > 0 && n > 0)
+                };
+                let playback_status = if idle {
+                    "Stopped"
+                } else if paused {
+                    "Paused"
+                } else {
+                    "Playing"
+                };
+                let loop_status = match repeat_mode {
+                    RepeatMode::None => "None",
+                    RepeatMode::One => "Track",
+                    RepeatMode::Playlist => "Playlist",
+                };
+                mpris_c.update(MprisState {
+                    playback_status: playback_status.into(),
+                    loop_status: loop_status.into(),
+                    title: title.as_deref().unwrap_or("").into(),
+                    artist: artist.clone(),
+                    album: album.clone(),
+                    position_us: (pos * 1_000_000.0) as i64,
+                    duration_us: (dur * 1_000_000.0) as i64,
+                    volume: volume / 100.0,
+                    can_go_next: can_next,
+                    can_go_previous: can_prev,
+                });
             }
 
             glib::ControlFlow::Continue

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Aurora Media Player
+GenericName=Media Player
+Comment=Modern media player for GNOME
+Exec=aurora-media-player %U
+Icon=${SNAP}/data-dir/icons/hicolor/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg
+Type=Application
+Terminal=false
+Categories=AudioVideo;Video;Audio;Player;GTK;
+MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/quicktime;video/webm;video/x-flv;video/x-ms-wmv;video/mp2t;video/x-m4v;audio/mpeg;audio/flac;audio/ogg;audio/opus;audio/aac;audio/mp4;audio/x-wav;audio/x-ms-wma;
+Keywords=media;player;video;audio;mpv;
+StartupNotify=true
+StartupWMClass=aurora-media

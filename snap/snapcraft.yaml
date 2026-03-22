@@ -23,6 +23,7 @@ apps:
       - home             # ~/Videos, ~/Music, ~/Downloads
       - removable-media  # USB drives, external disks
       - opengl           # GPU decoding (vaapi) + OpenGL render API
+      - unity7           # Session D-Bus access for MPRIS
     environment:
       # Prefer hardware-accelerated decoding; mpv falls back gracefully.
       LIBVA_DRIVER_NAME: ""
@@ -50,3 +51,9 @@ parts:
       # Ensure the binary lands in $CRAFT_PART_INSTALL/bin/
       install -Dm755 target/release/aurora-media \
         "$CRAFT_PART_INSTALL/bin/aurora-media"
+      # AppStream metainfo
+      install -Dm644 data/io.github.daniacosta_dev.AuroraMediaPlayer.metainfo.xml \
+        "$CRAFT_PART_INSTALL/share/metainfo/io.github.daniacosta_dev.AuroraMediaPlayer.metainfo.xml"
+      # App icon
+      install -Dm644 data/icons/hicolor/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg \
+        "$CRAFT_PART_INSTALL/share/icons/hicolor/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg"
