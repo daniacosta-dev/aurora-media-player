@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use std::rc::Rc;
 use std::cell::Cell;
-use gtk4::{self as gtk, GLArea, Overlay, Label, Stack, Box, Orientation, Image};
+use gtk4::{self as gtk, GLArea, Overlay, Label, Stack, Box, Orientation, Image, Spinner};
 use gtk4::prelude::*;
 use glib;
 use libc;
@@ -29,7 +29,8 @@ fn current_fbo() -> i32 {
 }
 
 pub struct VideoArea {
-    /// Root widget returned to the window layout.
+    /// Root widget returned to the window layout (Overlay wrapping the Stack).
+    root: Overlay,
     stack: Stack,
     // ── audio page ────────────────────────────────────────────────────────
     audio_cover: Image,
@@ -39,6 +40,8 @@ pub struct VideoArea {
     wave_playing: Rc<Cell<bool>>,
     // ── video page ────────────────────────────────────────────────────────
     idle_label: Label,
+    spinner_box: Box,
+    buffering_spinner: Spinner,
 }
 
 impl VideoArea {
@@ -190,6 +193,26 @@ impl VideoArea {
         stack.add_named(&audio_page, Some("audio"));
         stack.set_visible_child_name("video");
 
+        // ── Buffering spinner — overlaid on the whole stack ───────────────
+        let spinner_box = Box::builder()
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .css_classes(vec!["buffering-backdrop"])
+            .build();
+        let buffering_spinner = Spinner::builder()
+            .width_request(32)
+            .height_request(32)
+            .build();
+        spinner_box.append(&buffering_spinner);
+        spinner_box.set_visible(false);
+
+        let root = Overlay::builder()
+            .child(&stack)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+        root.add_overlay(&spinner_box);
+
         // ── Wakeup flag ───────────────────────────────────────────────────
         let needs_render = Arc::new(AtomicBool::new(false));
 
@@ -282,6 +305,7 @@ impl VideoArea {
         }
 
         Self {
+            root,
             stack,
             audio_cover,
             audio_title,
@@ -289,11 +313,13 @@ impl VideoArea {
             audio_album,
             wave_playing,
             idle_label,
+            spinner_box,
+            buffering_spinner,
         }
     }
 
-    pub fn widget(&self) -> &Stack {
-        &self.stack
+    pub fn widget(&self) -> &Overlay {
+        &self.root
     }
 
     /// Switch to the video/idle page.
@@ -328,5 +354,15 @@ impl VideoArea {
     /// Show or hide the "open a file" placeholder on the video page.
     pub fn set_idle(&self, idle: bool) {
         self.idle_label.set_visible(idle);
+    }
+
+    /// Show/hide the buffering spinner on the video overlay.
+    pub fn set_buffering(&self, buffering: bool) {
+        self.spinner_box.set_visible(buffering);
+        if buffering {
+            self.buffering_spinner.start();
+        } else {
+            self.buffering_spinner.stop();
+        }
     }
 }

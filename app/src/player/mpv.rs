@@ -214,6 +214,22 @@ impl MpvPlayer {
             .unwrap_or(true)
     }
 
+    /// True when mpv has paused playback because the network cache ran out.
+    pub fn is_buffering(&self) -> bool {
+        self.mpv
+            .get_property::<i64>("paused-for-cache")
+            .map(|v| v != 0)
+            .unwrap_or(false)
+    }
+
+    /// True while mpv is actively seeking (including network re-buffer after seek).
+    pub fn is_seeking(&self) -> bool {
+        self.mpv
+            .get_property::<i64>("seeking")
+            .map(|v| v != 0)
+            .unwrap_or(false)
+    }
+
     /// Returns the last playback error string, if any.
     /// mpv resets this when a new file loads successfully.
     pub fn last_error(&self) -> Option<String> {

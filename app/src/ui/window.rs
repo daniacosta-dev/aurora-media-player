@@ -266,12 +266,11 @@ impl MediaWindow {
                             load_playlist_items(items, &state_file, &playlist_file, true);
                         }
                     } else {
-                        state_file.borrow_mut().pending_seek = None;
-                        if let Some(p) = state_file.borrow().player.as_ref() {
-                            if let Err(e) = p.execute(PlayerCommand::Open(path)) {
-                                log::error!("open file: {e}");
-                            }
-                        }
+                        let title = path.file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("?")
+                            .to_string();
+                        load_playlist_items(vec![(title, path)], &state_file, &playlist_file, true);
                     }
                 },
                 move |items: Vec<(String, String)>| {
@@ -297,10 +296,11 @@ impl MediaWindow {
                                 load_playlist_items(items, &state_recent, &playlist_recent, true);
                             }
                         } else {
-                            state_recent.borrow_mut().pending_seek = None;
-                            if let Some(p) = state_recent.borrow().player.as_ref() {
-                                p.execute(PlayerCommand::Open(path)).ok();
-                            }
+                            let title = path.file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("?")
+                                .to_string();
+                            load_playlist_items(vec![(title, path)], &state_recent, &playlist_recent, true);
                         }
                     }
                 },
@@ -616,6 +616,7 @@ impl MediaWindow {
         let mpris_cmd_rx_c = mpris_cmd_rx.clone();
         let toast_overlay_c = toast_overlay.clone();
         let push_recent_c = push_recent.clone();
+        let window_title_c = header.window_title.clone();
         // Cooldown counter to avoid double-advancing when eof is briefly still true.
         let advance_cooldown = Rc::new(Cell::new(0u32));
         // Track previous idle state to detect unexpected stops (playback errors).
@@ -627,10 +628,13 @@ impl MediaWindow {
         let recent_pending_idx: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
         // Track current_idx so any external change (prev/next buttons) syncs the playlist UI.
         let last_known_idx: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
+        // Detect frozen playback (post-seek buffer stall) by watching time-pos.
+        let prev_pos = Rc::new(Cell::new(-1.0_f64));
+        let stuck_ticks = Rc::new(Cell::new(0u32));
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
             let (pos, dur, paused, muted, volume, speed, title, idle, has_video,
-                 artist, album, eof, pending_seek, repeat_mode, shuffle) = {
+                 artist, album, eof, pending_seek, repeat_mode, shuffle, buffering, seeking) = {
                 let s = state_c.borrow();
                 match s.player.as_ref() {
                     None => return glib::ControlFlow::Continue,
@@ -650,6 +654,8 @@ impl MediaWindow {
                         s.pending_seek,
                         s.repeat_mode,
                         s.shuffle,
+                        p.is_buffering(),
+                        p.is_seeking(),
                     ),
                 }
             };
@@ -759,6 +765,25 @@ impl MediaWindow {
 
             controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle);
 
+            // ── Header title / subtitle ─────────────────────────────────
+            {
+                let raw = title.as_deref().unwrap_or("");
+                let is_url_noise = raw.starts_with("http://")
+                    || raw.starts_with("https://")
+                    || (raw.contains('?') && raw.contains('=') && !raw.contains(' '));
+                let resolved = if idle || is_url_noise || raw.is_empty() { None } else { Some(raw) };
+                match resolved {
+                    None => {
+                        window_title_c.set_title("Aurora Media Player");
+                        window_title_c.set_subtitle("");
+                    }
+                    Some(name) => {
+                        window_title_c.set_title(&format!("Aurora — {name}"));
+                        window_title_c.set_subtitle(&artist);
+                    }
+                }
+            }
+
             // ── Tracks (audio + subtitles) ──────────────────────────────
             let tracks = {
                 let s = state_c.borrow();
@@ -820,16 +845,38 @@ impl MediaWindow {
                 }
             }
 
+            // Detect frozen playback: position not advancing while not paused.
+            // Triggers after 2 consecutive ticks (~400 ms) to avoid false positives.
+            if !idle && !eof && !paused && dur > 0.0 {
+                if (pos - prev_pos.get()).abs() < 0.05 {
+                    stuck_ticks.set(stuck_ticks.get().saturating_add(1));
+                } else {
+                    stuck_ticks.set(0);
+                }
+            } else {
+                stuck_ticks.set(0);
+            }
+            prev_pos.set(pos);
+            let frozen = stuck_ticks.get() >= 2;
+
+            // Show spinner when: initially loading, cache stall, seeking, or frozen after seek.
+            let show_spinner = !idle && !eof && (buffering || seeking || dur == 0.0 || frozen);
+
             if idle {
                 video_c.set_idle(true);
                 video_c.set_audio_playing(false);
+                video_c.set_buffering(false);
                 video_c.show_video();
-            } else if has_video {
+            } else if has_video || dur == 0.0 {
+                // While duration is unknown (initial load), stay on video page so
+                // only the spinner is visible — no redundant "Loading…" text.
                 video_c.set_idle(false);
                 video_c.set_audio_playing(false);
+                video_c.set_buffering(show_spinner);
                 video_c.show_video();
             } else {
                 let track_title = title.as_deref().unwrap_or("");
+                video_c.set_buffering(seeking || buffering);
                 video_c.show_audio(track_title, &artist, &album);
                 video_c.set_audio_playing(!paused);
             }

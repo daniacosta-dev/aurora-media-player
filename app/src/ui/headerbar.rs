@@ -43,6 +43,7 @@ pub struct MediaHeaderBar {
     /// `show-sidebar` property.
     pub playlist_btn: ToggleButton,
     pub push_recent_fn: Rc<dyn Fn(&std::path::Path, &str)>,
+    pub window_title: adw::WindowTitle,
 }
 
 impl MediaHeaderBar {
@@ -214,6 +215,12 @@ impl MediaHeaderBar {
         }
 
         header.pack_start(&file_btn);
+
+        // ── Window title (centered, title + subtitle) ─────────────────────
+        let window_title = adw::WindowTitle::builder()
+            .title("Aurora Media Player")
+            .build();
+        header.set_title_widget(Some(&window_title));
 
         // ── Playlist toggle ───────────────────────────────────────────────
         let playlist_btn = ToggleButton::builder()
@@ -409,11 +416,30 @@ impl MediaHeaderBar {
             },
         );
 
-        Self { header, playlist_btn, push_recent_fn }
+        Self { header, playlist_btn, push_recent_fn, window_title }
     }
 
     pub fn widget(&self) -> &HeaderBar {
         &self.header
+    }
+
+    /// Update the header title/subtitle with the currently playing track.
+    /// Pass `None` for `title` when idle to reset to "Aurora".
+    pub fn set_now_playing(&self, title: Option<&str>, artist: &str) {
+        match title {
+            None => {
+                self.window_title.set_title("Aurora");
+                self.window_title.set_subtitle("");
+            }
+            Some(raw) => {
+                let is_url_noise = raw.starts_with("http://")
+                    || raw.starts_with("https://")
+                    || (raw.contains('?') && raw.contains('=') && !raw.contains(' '));
+                let display = if is_url_noise || raw.is_empty() { "Loading…" } else { raw };
+                self.window_title.set_title(display);
+                self.window_title.set_subtitle(artist);
+            }
+        }
     }
 }
 

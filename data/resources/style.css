@@ -124,6 +124,13 @@ label.playlist-duration {
 }
 
 
+/* ── Buffering spinner backdrop ─────────────────────────────────────────────── */
+.buffering-backdrop {
+    background-color: rgba(0, 0, 0, 0.55);
+    border-radius: 9999px;
+    padding: 14px;
+}
+
 /* ── Audio-only view ────────────────────────────────────────────────────────── */
 .audio-cover-icon {
     margin-bottom: 20px;
