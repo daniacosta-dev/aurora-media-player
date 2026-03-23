@@ -422,59 +422,182 @@ impl MediaWindow {
 
         // ── Keyboard shortcuts ────────────────────────────────────────────
         {
-            let state_c = state.clone();
-            let window_weak = window.downgrade();
+            let state_c        = state.clone();
+            let win_weak       = window.downgrade();
+            let playlist_btn_w = header.playlist_btn.downgrade();
+            let open_file_w    = header.open_file_btn.downgrade();
+            let open_url_w     = header.open_url_btn.downgrade();
+            let open_sub_w     = header.open_sub_btn.downgrade();
+            let settings_w     = header.settings_btn.downgrade();
             let key_ctrl = gtk::EventControllerKey::new();
             key_ctrl.set_propagation_phase(gtk::PropagationPhase::Capture);
-            key_ctrl.connect_key_pressed(move |_, key, _, _| {
-                if key == gdk4::Key::space {
-                    if let Some(p) = state_c.borrow().player.as_ref() {
-                        p.execute(PlayerCommand::TogglePause).ok();
+            key_ctrl.connect_key_pressed(move |_, key, _, modifiers| {
+                // Don't steal keys when a text entry has focus.
+                if let Some(win) = win_weak.upgrade() {
+                    use gtk4::prelude::GtkWindowExt;
+                    if gtk4::prelude::GtkWindowExt::focus(&win)
+                        .map(|w: gtk::Widget| w.is::<gtk::Text>() || w.is::<gtk::Entry>() || w.is::<gtk::SearchEntry>())
+                        .unwrap_or(false)
+                    {
+                        return glib::Propagation::Proceed;
                     }
-                } else if key == gdk4::Key::Left {
-                    let s = state_c.borrow();
-                    if let Some(p) = s.player.as_ref() {
-                        if let Some(pos) = p.position() {
-                            p.execute(PlayerCommand::Seek((pos - 5.0).max(0.0))).ok();
-                        }
-                    }
-                } else if key == gdk4::Key::Right {
+                }
+
+                let ctrl  = modifiers.contains(gdk4::ModifierType::CONTROL_MASK);
+                let shift = modifiers.contains(gdk4::ModifierType::SHIFT_MASK);
+
+                // ── Helper: seek relative ────────────────────────────────
+                let seek = |delta: f64| {
                     let s = state_c.borrow();
                     if let Some(p) = s.player.as_ref() {
                         if let Some(pos) = p.position() {
                             let dur = p.duration().unwrap_or(f64::MAX);
-                            p.execute(PlayerCommand::Seek((pos + 5.0).min(dur))).ok();
+                            p.execute(PlayerCommand::Seek((pos + delta).clamp(0.0, dur))).ok();
                         }
                     }
-                } else if key == gdk4::Key::f || key == gdk4::Key::F {
-                    if let Some(win) = window_weak.upgrade() {
-                        if win.property::<bool>("fullscreened") {
-                            win.unfullscreen();
-                            win.unmaximize();
-                        } else {
-                            win.maximize();
-                            win.fullscreen();
+                };
+
+                match key {
+                    // ── Playback ─────────────────────────────────────────
+                    gdk4::Key::space => {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(PlayerCommand::TogglePause).ok();
                         }
                     }
-                } else if key == gdk4::Key::m || key == gdk4::Key::M {
-                    let muted = {
+
+                    // ── Seek ─────────────────────────────────────────────
+                    gdk4::Key::Left  if shift => seek(-30.0),
+                    gdk4::Key::Left            => seek(-5.0),
+                    gdk4::Key::Right if shift  => seek(30.0),
+                    gdk4::Key::Right           => seek(5.0),
+
+                    // ── Volume ───────────────────────────────────────────
+                    gdk4::Key::Up => {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            let v = (p.volume() + 5.0).min(100.0);
+                            p.execute(PlayerCommand::SetVolume(v)).ok();
+                        }
+                    }
+                    gdk4::Key::Down => {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            let v = (p.volume() - 5.0).max(0.0);
+                            p.execute(PlayerCommand::SetVolume(v)).ok();
+                        }
+                    }
+                    gdk4::Key::m | gdk4::Key::M => {
+                        let muted = {
+                            let mut s = state_c.borrow_mut();
+                            s.muted = !s.muted;
+                            s.muted
+                        };
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(PlayerCommand::Mute(muted)).ok();
+                        }
+                    }
+
+                    // ── Tracks ───────────────────────────────────────────
+                    gdk4::Key::n | gdk4::Key::N => {
                         let mut s = state_c.borrow_mut();
-                        s.muted = !s.muted;
-                        s.muted
-                    };
-                    if let Some(p) = state_c.borrow().player.as_ref() {
-                        p.execute(PlayerCommand::Mute(muted)).ok();
-                    }
-                } else if key == gdk4::Key::Escape {
-                    if let Some(win) = window_weak.upgrade() {
-                        if win.property::<bool>("fullscreened") {
-                            win.unfullscreen();
-                            win.unmaximize();
+                        let next = s.current_idx
+                            .and_then(|i| s.effective_next_idx(i))
+                            .and_then(|i| s.playlist.get(i).cloned().map(|p| (i, p)));
+                        if let Some((idx, path)) = next {
+                            s.current_idx = Some(idx);
+                            drop(s);
+                            if let Some(p) = state_c.borrow().player.as_ref() {
+                                p.execute(PlayerCommand::Open(path)).ok();
+                            }
                         }
                     }
-                } else {
-                    return glib::Propagation::Proceed;
+                    gdk4::Key::b | gdk4::Key::B => {
+                        let mut s = state_c.borrow_mut();
+                        let prev = s.current_idx
+                            .and_then(|i| i.checked_sub(1))
+                            .and_then(|i| s.playlist.get(i).cloned().map(|p| (i, p)));
+                        if let Some((idx, path)) = prev {
+                            s.current_idx = Some(idx);
+                            drop(s);
+                            if let Some(p) = state_c.borrow().player.as_ref() {
+                                p.execute(PlayerCommand::Open(path)).ok();
+                            }
+                        }
+                    }
+
+                    // ── Speed ────────────────────────────────────────────
+                    gdk4::Key::bracketright => {
+                        const STEPS: &[f64] = &[0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            let cur = p.speed();
+                            let next = STEPS.iter().find(|&&s| s > cur + 0.01).copied().unwrap_or(2.0);
+                            p.execute(PlayerCommand::SetSpeed(next)).ok();
+                        }
+                    }
+                    gdk4::Key::bracketleft => {
+                        const STEPS: &[f64] = &[0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            let cur = p.speed();
+                            let prev = STEPS.iter().rev().find(|&&s| s < cur - 0.01).copied().unwrap_or(0.25);
+                            p.execute(PlayerCommand::SetSpeed(prev)).ok();
+                        }
+                    }
+                    gdk4::Key::BackSpace => {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(PlayerCommand::SetSpeed(1.0)).ok();
+                        }
+                    }
+
+                    // ── Screenshot ───────────────────────────────────────
+                    gdk4::Key::s | gdk4::Key::S => {
+                        if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(PlayerCommand::Screenshot).ok();
+                        }
+                    }
+
+                    // ── File menu shortcuts ───────────────────────────────
+                    gdk4::Key::o | gdk4::Key::O if ctrl => {
+                        if let Some(b) = open_file_w.upgrade() { b.activate(); }
+                    }
+                    gdk4::Key::u | gdk4::Key::U if ctrl => {
+                        if let Some(b) = open_url_w.upgrade() { b.activate(); }
+                    }
+                    gdk4::Key::t | gdk4::Key::T if ctrl => {
+                        if let Some(b) = open_sub_w.upgrade() { b.activate(); }
+                    }
+                    gdk4::Key::comma if ctrl => {
+                        if let Some(b) = settings_w.upgrade() { b.activate(); }
+                    }
+
+                    // ── Playlist sidebar (Ctrl+P) ─────────────────────────
+                    gdk4::Key::p | gdk4::Key::P if ctrl => {
+                        if let Some(b) = playlist_btn_w.upgrade() {
+                            b.set_active(!b.is_active());
+                        }
+                    }
+
+                    // ── Fullscreen ───────────────────────────────────────
+                    gdk4::Key::f | gdk4::Key::F | gdk4::Key::F11 => {
+                        if let Some(win) = win_weak.upgrade() {
+                            if win.property::<bool>("fullscreened") {
+                                win.unfullscreen();
+                                win.unmaximize();
+                            } else {
+                                win.maximize();
+                                win.fullscreen();
+                            }
+                        }
+                    }
+                    gdk4::Key::Escape => {
+                        if let Some(win) = win_weak.upgrade() {
+                            if win.property::<bool>("fullscreened") {
+                                win.unfullscreen();
+                                win.unmaximize();
+                            }
+                        }
+                    }
+
+                    _ => return glib::Propagation::Proceed,
                 }
+                let _ = (ctrl, shift); // suppress unused warnings
                 glib::Propagation::Stop
             });
             window.add_controller(key_ctrl);
@@ -634,7 +757,8 @@ impl MediaWindow {
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
             let (pos, dur, paused, muted, volume, speed, title, idle, has_video,
-                 artist, album, eof, pending_seek, repeat_mode, shuffle, buffering, seeking) = {
+                 artist, album, eof, pending_seek, repeat_mode, shuffle, buffering, seeking,
+                 podcast_mode) = {
                 let s = state_c.borrow();
                 match s.player.as_ref() {
                     None => return glib::ControlFlow::Continue,
@@ -656,6 +780,7 @@ impl MediaWindow {
                         s.shuffle,
                         p.is_buffering(),
                         p.is_seeking(),
+                        s.podcast_mode,
                     ),
                 }
             };
@@ -763,7 +888,7 @@ impl MediaWindow {
                 }
             }
 
-            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle);
+            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle, podcast_mode);
 
             // ── Header title / subtitle ─────────────────────────────────
             {
@@ -867,7 +992,7 @@ impl MediaWindow {
                 video_c.set_audio_playing(false);
                 video_c.set_buffering(false);
                 video_c.show_video();
-            } else if has_video || dur == 0.0 {
+            } else if !podcast_mode && (has_video || dur == 0.0) {
                 // While duration is unknown (initial load), stay on video page so
                 // only the spinner is visible — no redundant "Loading…" text.
                 video_c.set_idle(false);

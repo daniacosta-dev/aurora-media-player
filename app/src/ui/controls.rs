@@ -27,6 +27,7 @@ pub struct PlayerControls {
     screenshot_btn: Button,
     speed_btn: Button,
     tracks_btn: Button,
+    podcast_btn: Button,
     tracks_popover: Popover,
     last_tracks: Rc<RefCell<Vec<crate::player::TrackInfo>>>,
     chapter_overlay: DrawingArea,
@@ -174,7 +175,7 @@ impl PlayerControls {
             .css_classes(vec!["shuffle-btn"])
             .tooltip_text("Shuffle")
             .build();
-        shuffle_btn.set_opacity(0.35); // inactive by default
+        shuffle_btn.set_opacity(0.5); // inactive by default
 
         // ── Volume ────────────────────────────────────────────────────────
         let vol_btn = Button::builder()
@@ -186,6 +187,14 @@ impl PlayerControls {
             .draw_value(false)
             .width_request(90)
             .build();
+
+        // ── Podcast mode button ───────────────────────────────────────────
+        let podcast_btn = Button::builder()
+            .icon_name("audio-headphones-symbolic")
+            .tooltip_text("Podcast mode — audio only (saves bandwidth)")
+            .css_classes(vec!["flat"])
+            .build();
+        podcast_btn.set_opacity(0.5); // inactive by default
 
         // ── Screenshot button ─────────────────────────────────────────────
         let screenshot_btn = Button::builder()
@@ -199,7 +208,9 @@ impl PlayerControls {
             .icon_name("media-optical-symbolic")
             .tooltip_text("Audio & Subtitle tracks")
             .css_classes(vec!["flat"])
+            .sensitive(false)
             .build();
+        tracks_btn.set_opacity(0.5);
         let tracks_popover = Popover::new();
         tracks_popover.set_parent(&tracks_btn);
         {
@@ -285,6 +296,7 @@ impl PlayerControls {
             .build();
         left_box.append(&repeat_btn);
         left_box.append(&shuffle_btn);
+        left_box.append(&podcast_btn);
         left_box.append(&screenshot_btn);
 
         end_row.append(&left_box);
@@ -298,6 +310,7 @@ impl PlayerControls {
             next_btn.upcast_ref(),
             repeat_btn.upcast_ref(),
             shuffle_btn.upcast_ref(),
+            podcast_btn.upcast_ref(),
             vol_btn.upcast_ref(),
             screenshot_btn.upcast_ref(),
             speed_btn.upcast_ref(),
@@ -312,6 +325,21 @@ impl PlayerControls {
         root.append(&seek_outer);
         root.append(&time_row);
         root.append(&end_row);
+
+        // ── Signal: podcast mode ─────────────────────────────────────────
+        {
+            let state_c = state.clone();
+            podcast_btn.connect_clicked(move |_| {
+                let podcast = {
+                    let mut s = state_c.borrow_mut();
+                    s.podcast_mode = !s.podcast_mode;
+                    s.podcast_mode
+                };
+                if let Some(p) = state_c.borrow().player.as_ref() {
+                    p.execute(PlayerCommand::SetVideoEnabled(!podcast)).ok();
+                }
+            });
+        }
 
         // ── Signal: screenshot ────────────────────────────────────────────
         {
@@ -451,6 +479,7 @@ impl PlayerControls {
             screenshot_btn,
             speed_btn,
             tracks_btn,
+            podcast_btn,
             tracks_popover,
             last_tracks: Rc::new(RefCell::new(Vec::new())),
             chapter_overlay,
@@ -478,7 +507,7 @@ impl PlayerControls {
     }
 
     /// Called at ~200 ms — updates buttons and state-driven UI.
-    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, speed: f64, idle: bool, has_video: bool, repeat: RepeatMode, shuffle: bool) {
+    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, speed: f64, idle: bool, has_video: bool, repeat: RepeatMode, shuffle: bool, podcast_mode: bool) {
         let has_media = !idle;
         self.play_btn.set_sensitive(has_media);
         self.prev_btn.set_sensitive(has_media);
@@ -512,7 +541,7 @@ impl PlayerControls {
         match repeat {
             RepeatMode::None => {
                 self.repeat_btn.set_icon_name("media-playlist-repeat-symbolic");
-                self.repeat_btn.set_opacity(0.35);
+                self.repeat_btn.set_opacity(0.5);
             }
             RepeatMode::Playlist => {
                 self.repeat_btn.set_icon_name("media-playlist-repeat-symbolic");
@@ -524,13 +553,28 @@ impl PlayerControls {
             }
         }
         self.speed_btn.set_label(&format!("{}×", speed));
-        self.shuffle_btn.set_opacity(if shuffle { 1.0 } else { 0.35 });
+        self.shuffle_btn.set_opacity(if shuffle { 1.0 } else { 0.5 });
+
+        // Screenshot: action button — consistent neutral opacity when visible.
+        self.screenshot_btn.set_opacity(0.6);
+
+        // Podcast button: only relevant for video streams (saves bandwidth).
+        // Show when there's video, or while podcast mode is on (video disabled but still a stream).
+        let show_podcast = has_media && (has_video || podcast_mode);
+        self.podcast_btn.set_visible(show_podcast);
+        self.podcast_btn.set_opacity(if podcast_mode { 1.0 } else { 0.5 });
     }
 
     pub fn update_tracks(&self, tracks: Vec<crate::player::TrackInfo>, state: &SharedState) {
+        let audio_count = tracks.iter().filter(|t| t.kind == "audio").count();
+        let sub_count   = tracks.iter().filter(|t| t.kind == "sub").count();
+        // Enable only when there's something to choose: multiple audio tracks or any subtitle.
+        let has_tracks  = audio_count > 1 || sub_count > 0;
+        self.tracks_btn.set_sensitive(has_tracks);
+        self.tracks_btn.set_opacity(if has_tracks { 1.0 } else { 0.5 });
+
         {
             let last = self.last_tracks.borrow();
-            // Compare by (id, kind, selected) to detect changes
             let unchanged = last.len() == tracks.len()
                 && last.iter().zip(&tracks).all(|(a, b)| {
                     a.id == b.id && a.kind == b.kind && a.selected == b.selected
@@ -590,7 +634,7 @@ impl PlayerControls {
             }
         }
 
-        {
+        if !sub_tracks.is_empty() {
             let lbl = gtk::Label::builder()
                 .label("Subtitles")
                 .halign(gtk::Align::Start)
@@ -652,7 +696,6 @@ impl PlayerControls {
         }
 
         // Visibility: show button only when there are non-video tracks
-        self.tracks_btn.set_visible(!audio_tracks.is_empty() || !sub_tracks.is_empty());
 
         self.tracks_popover.set_child(Some(&popover_box));
     }

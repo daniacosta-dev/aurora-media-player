@@ -154,6 +154,13 @@ impl MpvPlayer {
                     self.mpv.set_property("sid", id).ok();
                 }
             }
+            PlayerCommand::SetVideoEnabled(enabled) => {
+                if enabled {
+                    self.mpv.set_property("vid", "auto").ok();
+                } else {
+                    self.mpv.set_property("vid", "no").ok();
+                }
+            }
             PlayerCommand::AddSubtitle(path) => {
                 let path_str = path.to_str().ok_or_else(|| anyhow::anyhow!("non-UTF8 path"))?;
                 mpv_command_array(self.mpv.ctx.as_ptr(), &["sub-add", path_str, "select"])?;

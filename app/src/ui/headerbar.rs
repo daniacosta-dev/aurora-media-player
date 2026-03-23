@@ -39,11 +39,14 @@ fn save_recent(entries: &[RecentEntry]) {
 
 pub struct MediaHeaderBar {
     header: HeaderBar,
-    /// Exposed so the window can bind it to the OverlaySplitView's
-    /// `show-sidebar` property.
     pub playlist_btn: ToggleButton,
     pub push_recent_fn: Rc<dyn Fn(&std::path::Path, &str)>,
     pub window_title: adw::WindowTitle,
+    /// Exposed for keyboard shortcuts — activate() triggers the connected handler.
+    pub open_file_btn: Button,
+    pub open_url_btn: Button,
+    pub open_sub_btn: Button,
+    pub settings_btn: Button,
 }
 
 impl MediaHeaderBar {
@@ -416,7 +419,8 @@ impl MediaHeaderBar {
             },
         );
 
-        Self { header, playlist_btn, push_recent_fn, window_title }
+        Self { header, playlist_btn, push_recent_fn, window_title,
+               open_file_btn, open_url_btn, open_sub_btn, settings_btn }
     }
 
     pub fn widget(&self) -> &HeaderBar {
@@ -538,6 +542,10 @@ fn show_settings_dialog(parent: &gtk::Window) {
         .margin_end(12)
         .build();
 
+    let saved_scheme = load_app_settings()
+        .color_scheme
+        .unwrap_or_else(|| "system".into());
+
     let theme_list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["boxed-list"])
@@ -545,34 +553,148 @@ fn show_settings_dialog(parent: &gtk::Window) {
         .margin_end(12)
         .build();
 
-    let saved_scheme = load_app_settings()
-        .color_scheme
-        .unwrap_or_else(|| "system".into());
+    let theme_row = adw::ActionRow::builder()
+        .title("Theme")
+        .build();
 
-    let mk_row = |title: &str, key: &str| -> (adw::ActionRow, gtk::CheckButton) {
-        let row = adw::ActionRow::builder()
-            .title(title)
-            .activatable(true)
-            .build();
-        let check = gtk::CheckButton::builder()
-            .active(saved_scheme == key)
+    let btn_system = gtk::ToggleButton::builder()
+        .label("System")
+        .active(saved_scheme == "system")
+        .valign(gtk::Align::Center)
+        .build();
+    let btn_light = gtk::ToggleButton::builder()
+        .label("Light")
+        .active(saved_scheme == "light")
+        .group(&btn_system)
+        .valign(gtk::Align::Center)
+        .build();
+    let btn_dark = gtk::ToggleButton::builder()
+        .label("Dark")
+        .active(saved_scheme == "dark")
+        .group(&btn_system)
+        .valign(gtk::Align::Center)
+        .build();
+
+    let theme_btns = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .css_classes(["linked"])
+        .valign(gtk::Align::Center)
+        .margin_top(8)
+        .margin_bottom(8)
+        .build();
+    theme_btns.append(&btn_system);
+    theme_btns.append(&btn_light);
+    theme_btns.append(&btn_dark);
+
+    theme_row.add_suffix(&theme_btns);
+    theme_list.append(&theme_row);
+
+    // ── Keyboard shortcuts section ────────────────────────────────────────
+    let shortcuts_lbl = gtk::Label::builder()
+        .label("Keyboard Shortcuts")
+        .halign(gtk::Align::Start)
+        .css_classes(["heading"])
+        .margin_top(24)
+        .margin_bottom(6)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    // Helper: build a row with a ShortcutLabel suffix
+    let mk_sc = |title: &str, accel: &str| -> adw::ActionRow {
+        let row = adw::ActionRow::builder().title(title).build();
+        let label = gtk::ShortcutLabel::builder()
+            .accelerator(accel)
             .valign(gtk::Align::Center)
             .build();
-        row.add_suffix(&check);
-        row.set_activatable_widget(Some(&check));
-        (row, check)
+        row.add_suffix(&label);
+        row
     };
 
-    let (row_system, check_system) = mk_row("Follow system", "system");
-    let (row_light,  check_light)  = mk_row("Light", "light");
-    let (row_dark,   check_dark)   = mk_row("Dark",  "dark");
+    // ── Playback ──────────────────────────────────────────────────────────
+    let playback_lbl = gtk::Label::builder()
+        .label("Playback")
+        .halign(gtk::Align::Start)
+        .css_classes(["caption", "dim-label"])
+        .margin_top(6)
+        .margin_bottom(2)
+        .margin_start(16)
+        .build();
+    let playback_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    playback_list.append(&mk_sc("Play / Pause",    "space"));
+    playback_list.append(&mk_sc("Next track",      "n"));
+    playback_list.append(&mk_sc("Previous track",  "b"));
+    playback_list.append(&mk_sc("Mute",            "m"));
+    playback_list.append(&mk_sc("Screenshot",      "s"));
 
-    check_light.set_group(Some(&check_system));
-    check_dark.set_group(Some(&check_system));
+    // ── Seek & Volume ─────────────────────────────────────────────────────
+    let seek_lbl = gtk::Label::builder()
+        .label("Seek & Volume")
+        .halign(gtk::Align::Start)
+        .css_classes(["caption", "dim-label"])
+        .margin_top(12)
+        .margin_bottom(2)
+        .margin_start(16)
+        .build();
+    let seek_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    seek_list.append(&mk_sc("Seek −5 s",       "Left"));
+    seek_list.append(&mk_sc("Seek +5 s",       "Right"));
+    seek_list.append(&mk_sc("Seek −30 s",      "<Shift>Left"));
+    seek_list.append(&mk_sc("Seek +30 s",      "<Shift>Right"));
+    seek_list.append(&mk_sc("Volume up",       "Up"));
+    seek_list.append(&mk_sc("Volume down",     "Down"));
 
-    theme_list.append(&row_system);
-    theme_list.append(&row_light);
-    theme_list.append(&row_dark);
+    // ── Speed & Video ─────────────────────────────────────────────────────
+    let video_lbl = gtk::Label::builder()
+        .label("Speed & Video")
+        .halign(gtk::Align::Start)
+        .css_classes(["caption", "dim-label"])
+        .margin_top(12)
+        .margin_bottom(2)
+        .margin_start(16)
+        .build();
+    let video_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    video_list.append(&mk_sc("Speed up",          "bracketright"));
+    video_list.append(&mk_sc("Speed down",        "bracketleft"));
+    video_list.append(&mk_sc("Reset speed",       "BackSpace"));
+    video_list.append(&mk_sc("Fullscreen",        "f"));
+    video_list.append(&mk_sc("Exit fullscreen",   "Escape"));
+
+    // ── App ───────────────────────────────────────────────────────────────
+    let app_lbl = gtk::Label::builder()
+        .label("App")
+        .halign(gtk::Align::Start)
+        .css_classes(["caption", "dim-label"])
+        .margin_top(12)
+        .margin_bottom(2)
+        .margin_start(16)
+        .build();
+    let app_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+    app_list.append(&mk_sc("Open file",        "<Primary>o"));
+    app_list.append(&mk_sc("Open URL",         "<Primary>u"));
+    app_list.append(&mk_sc("Load subtitle",    "<Primary>t"));
+    app_list.append(&mk_sc("Toggle playlist",  "<Primary>p"));
+    app_list.append(&mk_sc("Settings",         "<Primary>comma"));
 
     // ── Footer ────────────────────────────────────────────────────────────
     let footer = gtk::Label::builder()
@@ -593,9 +715,19 @@ fn show_settings_dialog(parent: &gtk::Window) {
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
+        .margin_bottom(24)
         .build();
     content.append(&appearance_lbl);
     content.append(&theme_list);
+    content.append(&shortcuts_lbl);
+    content.append(&playback_lbl);
+    content.append(&playback_list);
+    content.append(&seek_lbl);
+    content.append(&seek_list);
+    content.append(&video_lbl);
+    content.append(&video_list);
+    content.append(&app_lbl);
+    content.append(&app_list);
     content.append(&footer);
 
     let scroll = gtk::ScrolledWindow::builder()
@@ -609,29 +741,23 @@ fn show_settings_dialog(parent: &gtk::Window) {
     toolbar_view.set_content(Some(&scroll));
     dialog.set_content(Some(&toolbar_view));
 
-    // Wire radio buttons → StyleManager + persistence
-    check_system.connect_toggled(|btn| {
+    // Wire theme buttons → StyleManager + persistence
+    btn_system.connect_toggled(|btn| {
         if btn.is_active() {
             adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
-            let mut s = load_app_settings();
-            s.color_scheme = Some("system".into());
-            save_app_settings(&s);
+            let mut s = load_app_settings(); s.color_scheme = Some("system".into()); save_app_settings(&s);
         }
     });
-    check_light.connect_toggled(|btn| {
+    btn_light.connect_toggled(|btn| {
         if btn.is_active() {
             adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight);
-            let mut s = load_app_settings();
-            s.color_scheme = Some("light".into());
-            save_app_settings(&s);
+            let mut s = load_app_settings(); s.color_scheme = Some("light".into()); save_app_settings(&s);
         }
     });
-    check_dark.connect_toggled(|btn| {
+    btn_dark.connect_toggled(|btn| {
         if btn.is_active() {
             adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
-            let mut s = load_app_settings();
-            s.color_scheme = Some("dark".into());
-            save_app_settings(&s);
+            let mut s = load_app_settings(); s.color_scheme = Some("dark".into()); save_app_settings(&s);
         }
     });
 

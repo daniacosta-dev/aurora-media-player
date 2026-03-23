@@ -19,6 +19,7 @@ pub struct PlayerState {
     pub repeat_mode: RepeatMode,
     pub shuffle: bool,
     pub shuffle_order: Vec<usize>,
+    pub podcast_mode: bool,
 }
 
 /// Single-threaded shared handle used throughout the UI tree.
@@ -40,6 +41,7 @@ impl PlayerState {
             repeat_mode: RepeatMode::default(),
             shuffle: false,
             shuffle_order: Vec::new(),
+            podcast_mode: false,
         }))
     }
 
