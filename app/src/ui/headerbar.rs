@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use adw::{self, HeaderBar};
 use adw::prelude::*;
-use gtk4::{self as gtk, Button, ToggleButton, Popover};
+use gtk4::{self as gtk, Button, ToggleButton};
 use gtk4::prelude::*;
 use gio;
 
@@ -65,40 +65,155 @@ impl MediaHeaderBar {
     ) -> Self {
         let header = HeaderBar::new();
 
-        // ── Open file button ──────────────────────────────────────────────
-        let open_btn = Button::builder()
-            .icon_name("document-open-symbolic")
-            .tooltip_text("Open file")
-            .build();
-        header.pack_start(&open_btn);
+        // ── File menu ─────────────────────────────────────────────────────────────
+        let file_btn = Button::builder().label("File").build();
 
-        // ── Subtitle file button ──────────────────────────────────────────
-        let sub_btn = Button::builder()
-            .icon_name("media-view-subtitles-symbolic")
-            .tooltip_text("Load subtitle file")
-            .build();
-        header.pack_start(&sub_btn);
+        // Main popover — autohide closes it when clicking outside
+        let file_popover = gtk::Popover::new();
+        file_popover.set_autohide(true);
+        file_popover.set_has_arrow(false);
+        file_popover.add_css_class("file-menu-popover");
+        file_popover.set_parent(&file_btn);
 
-        // ── Recent files button ───────────────────────────────────────────
-        let recent_btn = Button::builder()
-            .icon_name("document-open-recent-symbolic")
-            .tooltip_text("Recent files")
+        let menu_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_top(4).margin_bottom(4)
             .build();
-        header.pack_start(&recent_btn);
+        file_popover.set_child(Some(&menu_box));
 
-        let recent_popover = Popover::new();
-        recent_popover.set_parent(&recent_btn);
+        // Helper: flat button styled as a menu item
+        let mk_item = |icon: &str, label: &str| -> Button {
+            let btn = Button::new();
+            btn.add_css_class("flat");
+            btn.add_css_class("file-menu-item");
+            let row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .margin_start(8).margin_end(16)
+                .margin_top(2).margin_bottom(2)
+                .build();
+            row.append(&gtk::Image::from_icon_name(icon));
+            let lbl = gtk::Label::builder()
+                .label(label)
+                .halign(gtk::Align::Start)
+                .hexpand(true)
+                .build();
+            row.append(&lbl);
+            btn.set_child(Some(&row));
+            btn
+        };
+
+        let open_file_btn = mk_item("document-open-symbolic",       "Open File…");
+        let open_url_btn  = mk_item("insert-link-symbolic",          "Open URL or Playlist…");
+        let open_sub_btn  = mk_item("media-view-subtitles-symbolic", "Load Subtitle File…");
+
+        // Recent Files row — right-arrow indicates a submenu
+        let recent_row_btn = {
+            let btn = Button::new();
+            btn.add_css_class("flat");
+            btn.add_css_class("file-menu-item");
+            let row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .margin_start(8).margin_end(16)
+                .margin_top(2).margin_bottom(2)
+                .build();
+            row.append(&gtk::Image::from_icon_name("document-open-recent-symbolic"));
+            let lbl = gtk::Label::builder()
+                .label("Recent Files")
+                .halign(gtk::Align::Start)
+                .hexpand(true)
+                .build();
+            row.append(&lbl);
+            row.append(&gtk::Image::from_icon_name("go-next-symbolic"));
+            btn.set_child(Some(&row));
+            btn
+        };
+
+        menu_box.append(&open_file_btn);
+        menu_box.append(&open_url_btn);
+        menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        menu_box.append(&open_sub_btn);
+        menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        menu_box.append(&recent_row_btn);
+
+        // ── Recent sub-popover ─────────────────────────────────────────────────
+        // Parented to recent_row_btn (inside file_popover) so autohide on the
+        // main popover correctly considers clicks here as "inside the cascade".
+        let recent_sub = gtk::Popover::new();
+        recent_sub.set_autohide(false);
+        recent_sub.set_has_arrow(false);
+        recent_sub.add_css_class("file-menu-popover");
+        recent_sub.set_parent(&recent_row_btn);
+        recent_sub.set_position(gtk::PositionType::Right);
+
+        let recent_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .margin_top(4).margin_bottom(4)
+            .build();
+        recent_sub.set_child(Some(&recent_box));
+
+        // ── Hover / auto-close logic ───────────────────────────────────────────
+        // - Main popover: stays open; closes on click outside or click "File".
+        // - Recent sub:   opens on hover over "Recent Files" row;
+        //                 closes only when hovering another menu item.
+
+        // Hover Recent Files row → popup sub
         {
-            let rp = recent_popover.clone();
-            recent_btn.connect_clicked(move |_| { rp.popup(); });
+            let rs = recent_sub.downgrade();
+            let mc = gtk::EventControllerMotion::new();
+            mc.connect_enter(move |_, _, _| {
+                if let Some(r) = rs.upgrade() { r.popup(); }
+            });
+            recent_row_btn.add_controller(mc);
         }
 
-        // ── Open URL / URL playlist button ────────────────────────────────
-        let url_btn = Button::builder()
-            .icon_name("insert-link-symbolic")
-            .tooltip_text("Open URL or URL playlist")
-            .build();
-        header.pack_start(&url_btn);
+        // Hover any other item → close sub
+        for btn in [&open_file_btn, &open_url_btn, &open_sub_btn] {
+            let rs = recent_sub.downgrade();
+            let mc = gtk::EventControllerMotion::new();
+            mc.connect_enter(move |_, _, _| {
+                if let Some(r) = rs.upgrade() { r.popdown(); }
+            });
+            btn.add_controller(mc);
+        }
+
+        // Main popover closed → also close sub
+        {
+            let rs = recent_sub.downgrade();
+            file_popover.connect_closed(move |_| {
+                if let Some(r) = rs.upgrade() { r.popdown(); }
+            });
+        }
+
+        // File button click → toggle main popover
+        {
+            let fp = file_popover.downgrade();
+            file_btn.connect_clicked(move |_| {
+                if let Some(f) = fp.upgrade() {
+                    if f.is_visible() { f.popdown(); } else { f.popup(); }
+                }
+            });
+        }
+
+        // Align left edge of popover with the window edge
+        {
+            let btn_w = file_btn.downgrade();
+            file_popover.connect_show(move |popover| {
+                if let Some(btn) = btn_w.upgrade() {
+                    if let Some(root) = btn.root() {
+                        if let Some((x, _)) = btn.translate_coordinates(&root, 0.0, 0.0) {
+                            let btn_center = x + btn.width() as f64 / 2.0;
+                            // 140 = half of CSS min-width 280px
+                            let offset = ((140.0 - btn_center) as i32).max(0);
+                            popover.set_offset(offset, 0);
+                        }
+                    }
+                }
+            });
+        }
+
+        header.pack_start(&file_btn);
 
         // ── Playlist toggle ───────────────────────────────────────────────
         let playlist_btn = ToggleButton::builder()
@@ -109,7 +224,7 @@ impl MediaHeaderBar {
 
         // ── Settings button ───────────────────────────────────────────────
         let settings_btn = Button::builder()
-            .icon_name("open-menu-symbolic")
+            .icon_name("preferences-system-symbolic")
             .tooltip_text("Settings")
             .build();
         header.pack_end(&settings_btn);
@@ -120,16 +235,32 @@ impl MediaHeaderBar {
             .unwrap_or_else(|| "system".into());
         adw::StyleManager::default().set_color_scheme(adw_scheme(&saved_scheme));
 
-        // ── Wire: settings button → settings dialog ───────────────────────
+        // ── Pointer cursor on header buttons ──────────────────────────────
+        for w in [
+            file_btn.upcast_ref::<gtk::Widget>(),
+            playlist_btn.upcast_ref(),
+            settings_btn.upcast_ref(),
+            open_file_btn.upcast_ref(),
+            open_url_btn.upcast_ref(),
+            open_sub_btn.upcast_ref(),
+            recent_row_btn.upcast_ref(),
+        ] {
+            w.set_cursor_from_name(Some("pointer"));
+        }
+
+        // ── Wire: settings ────────────────────────────────────────────────
         settings_btn.connect_clicked(|btn| {
             let Some(parent) = btn.root().and_downcast::<gtk::Window>() else { return };
             show_settings_dialog(&parent);
         });
 
-        // ── Wire: open button → GTK FileDialog (portal-backed) ────────────
+        // ── Wire: open file ───────────────────────────────────────────────
         {
             let on_open_file = Rc::new(on_open_file);
-            open_btn.connect_clicked(move |btn| {
+            let fp = file_popover.downgrade();
+            let btn_w = file_btn.downgrade();
+            open_file_btn.connect_clicked(move |_| {
+                if let Some(f) = fp.upgrade() { f.popdown(); }
                 let on_open_file = on_open_file.clone();
                 let media_filter = gtk::FileFilter::new();
                 media_filter.set_name(Some("Media files"));
@@ -137,59 +268,57 @@ impl MediaHeaderBar {
                     "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "ts",
                     "mp3", "flac", "ogg", "opus", "aac", "m4a", "wav", "wma",
                     "m3u", "m3u8",
-                ] {
-                    media_filter.add_suffix(ext);
-                }
-
+                ] { media_filter.add_suffix(ext); }
                 let video_filter = gtk::FileFilter::new();
                 video_filter.set_name(Some("Video files"));
                 for ext in ["mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "ts"] {
                     video_filter.add_suffix(ext);
                 }
-
                 let audio_filter = gtk::FileFilter::new();
                 audio_filter.set_name(Some("Audio files"));
                 for ext in ["mp3", "flac", "ogg", "opus", "aac", "m4a", "wav", "wma"] {
                     audio_filter.add_suffix(ext);
                 }
-
                 let playlist_filter = gtk::FileFilter::new();
                 playlist_filter.set_name(Some("Playlist files"));
-                for ext in ["m3u", "m3u8"] {
-                    playlist_filter.add_suffix(ext);
-                }
-
+                for ext in ["m3u", "m3u8"] { playlist_filter.add_suffix(ext); }
                 let filters = gio::ListStore::new::<gtk::FileFilter>();
                 filters.append(&media_filter);
                 filters.append(&video_filter);
                 filters.append(&audio_filter);
                 filters.append(&playlist_filter);
-
                 let dialog = gtk::FileDialog::builder()
-                    .title("Open Media File")
-                    .modal(true)
-                    .filters(&filters)
-                    .build();
-
-                let parent = btn.root().and_downcast::<gtk::Window>();
-                dialog.open(
-                    parent.as_ref(),
-                    None::<&gio::Cancellable>,
-                    move |result| {
-                        if let Ok(file) = result {
-                            if let Some(path) = file.path() {
-                                on_open_file(path);
-                            }
-                        }
-                    },
-                );
+                    .title("Open Media File").modal(true).filters(&filters).build();
+                let parent = btn_w.upgrade().and_then(|b| b.root()).and_downcast::<gtk::Window>();
+                dialog.open(parent.as_ref(), None::<&gio::Cancellable>, move |result| {
+                    if let Ok(file) = result {
+                        if let Some(path) = file.path() { on_open_file(path); }
+                    }
+                });
             });
         }
 
-        // ── Wire: subtitle button → file dialog ──────────────────────────
+        // ── Wire: open URL ────────────────────────────────────────────────
+        {
+            let on_url_playlist = Rc::new(on_url_playlist);
+            let fp = file_popover.downgrade();
+            let btn_w = file_btn.downgrade();
+            open_url_btn.connect_clicked(move |_| {
+                if let Some(f) = fp.upgrade() { f.popdown(); }
+                let Some(parent) = btn_w.upgrade()
+                    .and_then(|b| b.root())
+                    .and_downcast::<gtk::Window>() else { return };
+                show_url_playlist_dialog(&parent, on_url_playlist.clone());
+            });
+        }
+
+        // ── Wire: subtitle ────────────────────────────────────────────────
         {
             let on_open_subtitle = Rc::new(on_open_subtitle);
-            sub_btn.connect_clicked(move |btn| {
+            let fp = file_popover.downgrade();
+            let btn_w = file_btn.downgrade();
+            open_sub_btn.connect_clicked(move |_| {
+                if let Some(f) = fp.upgrade() { f.popdown(); }
                 let on_open_subtitle = on_open_subtitle.clone();
                 let sub_filter = gtk::FileFilter::new();
                 sub_filter.set_name(Some("Subtitle files"));
@@ -199,86 +328,86 @@ impl MediaHeaderBar {
                 let filters = gio::ListStore::new::<gtk::FileFilter>();
                 filters.append(&sub_filter);
                 let dialog = gtk::FileDialog::builder()
-                    .title("Open Subtitle File")
-                    .modal(true)
-                    .filters(&filters)
-                    .build();
-                let parent = btn.root().and_downcast::<gtk::Window>();
+                    .title("Open Subtitle File").modal(true).filters(&filters).build();
+                let parent = btn_w.upgrade().and_then(|b| b.root()).and_downcast::<gtk::Window>();
                 dialog.open(parent.as_ref(), None::<&gio::Cancellable>, move |result| {
                     if let Ok(file) = result {
-                        if let Some(path) = file.path() {
-                            on_open_subtitle(path);
-                        }
+                        if let Some(path) = file.path() { on_open_subtitle(path); }
                     }
                 });
             });
         }
 
-        // ── Wire: recent popover → rebuild on show ────────────────────────
+        // ── Recent files ──────────────────────────────────────────────────
         let on_open_recent = Rc::new(on_open_recent);
-        {
-            let on_open_c = on_open_recent.clone();
-            recent_popover.connect_show(move |popover| {
+
+        let populate_recent: Rc<dyn Fn()> = {
+            let rbox = recent_box.downgrade();
+            let fp   = file_popover.downgrade();
+            let rs   = recent_sub.downgrade();
+            let on_open_recent = on_open_recent.clone();
+            Rc::new(move || {
+                let Some(rbox) = rbox.upgrade() else { return };
+                while let Some(child) = rbox.first_child() { rbox.remove(&child); }
                 let entries = load_recent();
-                // Clear old content
-                popover.set_child(None::<&gtk::Widget>);
                 if entries.is_empty() {
                     let lbl = gtk::Label::builder()
                         .label("No recent files")
-                        .css_classes(vec!["dim-label"])
-                        .margin_top(8).margin_bottom(8)
                         .margin_start(12).margin_end(12)
+                        .margin_top(6).margin_bottom(6)
+                        .css_classes(["dim-label"])
                         .build();
-                    popover.set_child(Some(&lbl));
-                    return;
+                    rbox.append(&lbl);
+                } else {
+                    for entry in entries {
+                        let btn = Button::new();
+                        btn.add_css_class("flat");
+                        btn.add_css_class("file-menu-item");
+                        let row = gtk::Box::builder()
+                            .orientation(gtk::Orientation::Horizontal)
+                            .spacing(8)
+                            .margin_start(8).margin_end(16)
+                            .margin_top(2).margin_bottom(2)
+                            .build();
+                        row.append(&gtk::Image::from_icon_name("document-symbolic"));
+                        let lbl = gtk::Label::builder()
+                            .label(&entry.title)
+                            .halign(gtk::Align::Start)
+                            .hexpand(true)
+                            .ellipsize(gtk4::pango::EllipsizeMode::End)
+                            .build();
+                        row.append(&lbl);
+                        btn.set_child(Some(&row));
+                        btn.set_cursor_from_name(Some("pointer"));
+                        let path = std::path::PathBuf::from(&entry.path);
+                        let on_open_c = on_open_recent.clone();
+                        let fp_w = fp.clone();
+                        let rs_w = rs.clone();
+                        btn.connect_clicked(move |_| {
+                            if let Some(r) = rs_w.upgrade() { r.popdown(); }
+                            if let Some(f) = fp_w.upgrade() { f.popdown(); }
+                            on_open_c(path.clone());
+                        });
+                        rbox.append(&btn);
+                    }
                 }
-                let vbox = gtk::Box::builder()
-                    .orientation(gtk::Orientation::Vertical)
-                    .spacing(2)
-                    .margin_top(4).margin_bottom(4)
-                    .margin_start(4).margin_end(4)
-                    .build();
-                for entry in &entries {
-                    let btn = Button::builder()
-                        .label(&entry.title)
-                        .css_classes(vec!["flat"])
-                        .halign(gtk::Align::Fill)
-                        .build();
-                    let path = std::path::PathBuf::from(&entry.path);
-                    let on_open = on_open_c.clone();
-                    let popover_weak = popover.downgrade();
-                    btn.connect_clicked(move |_| {
-                        on_open(path.clone());
-                        if let Some(p) = popover_weak.upgrade() {
-                            p.popdown();
-                        }
-                    });
-                    vbox.append(&btn);
-                }
-                popover.set_child(Some(&vbox));
-            });
-        }
+            })
+        };
+        populate_recent();
 
-        // ── push_recent_fn closure ────────────────────────────────────────
-        let push_recent_fn: Rc<dyn Fn(&std::path::Path, &str)> = Rc::new(move |path: &std::path::Path, title: &str| {
-            let mut entries = load_recent();
-            let path_str = path.to_string_lossy().to_string();
-            entries.retain(|e| e.path != path_str);
-            entries.insert(0, RecentEntry { path: path_str, title: title.to_string() });
-            entries.truncate(10);
-            save_recent(&entries);
-        });
-
-        // ── Wire: URL button → URL playlist dialog ────────────────────────
-        {
-            let on_url_playlist = Rc::new(on_url_playlist);
-            url_btn.connect_clicked(move |btn| {
-                let Some(parent) = btn.root().and_downcast::<gtk::Window>() else {
-                    return;
-                };
-                show_url_playlist_dialog(&parent, on_url_playlist.clone());
-            });
-        }
+        // ── push_recent_fn ────────────────────────────────────────────────
+        let populate_recent_c = populate_recent.clone();
+        let push_recent_fn: Rc<dyn Fn(&std::path::Path, &str)> = Rc::new(
+            move |path: &std::path::Path, title: &str| {
+                let mut entries = load_recent();
+                let path_str = path.to_string_lossy().to_string();
+                entries.retain(|e| e.path != path_str);
+                entries.insert(0, RecentEntry { path: path_str, title: title.to_string() });
+                entries.truncate(10);
+                save_recent(&entries);
+                populate_recent_c();
+            },
+        );
 
         Self { header, playlist_btn, push_recent_fn }
     }

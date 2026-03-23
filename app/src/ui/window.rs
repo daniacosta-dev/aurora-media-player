@@ -313,12 +313,19 @@ impl MediaWindow {
         // Controls float over video so in fullscreen they can hide without
         // shrinking the video area.
         controls.widget().set_valign(gtk::Align::End);
+        let controls_revealer = gtk::Revealer::builder()
+            .transition_type(gtk::RevealerTransitionType::SlideUp)
+            .transition_duration(220)
+            .reveal_child(true)
+            .valign(gtk::Align::End)
+            .child(controls.widget())
+            .build();
         let video_controls = gtk::Overlay::builder()
             .child(video.widget())
             .hexpand(true)
             .vexpand(true)
             .build();
-        video_controls.add_overlay(controls.widget());
+        video_controls.add_overlay(&controls_revealer);
 
         let split_view = OverlaySplitView::builder()
             .sidebar(playlist.widget())
@@ -473,6 +480,17 @@ impl MediaWindow {
             window.add_controller(key_ctrl);
         }
 
+        // ── Track whether mouse is over the controls bar ──────────────────
+        let mouse_over_controls: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+        {
+            let moc_enter = mouse_over_controls.clone();
+            let moc_leave = mouse_over_controls.clone();
+            let mc = gtk::EventControllerMotion::new();
+            mc.connect_enter(move |_, _, _| { moc_enter.set(true); });
+            mc.connect_leave(move |_| { moc_leave.set(false); });
+            controls_revealer.add_controller(mc);
+        }
+
         // ── Mouse motion → reset auto-hide timer ──────────────────────────
         // Use a 4-px threshold so sub-pixel jitter from the compositor doesn't
         // keep resetting the timer when the user's mouse is effectively still.
@@ -482,7 +500,7 @@ impl MediaWindow {
             let last_motion_c = last_motion.clone();
             let last_pos_c = last_cursor_pos.clone();
             let toolbar_view_c = toolbar_view.downgrade();
-            let controls_widget_c = controls.widget().downgrade();
+            let controls_revealer_c = controls_revealer.downgrade();
             let split_view_c = split_view.downgrade();
             let playlist_btn_c = header.playlist_btn.downgrade();
             let window_c = window.downgrade();
@@ -497,8 +515,8 @@ impl MediaWindow {
                 if let Some(tv) = toolbar_view_c.upgrade() {
                     tv.set_reveal_top_bars(true);
                 }
-                if let Some(cw) = controls_widget_c.upgrade() {
-                    cw.set_visible(true);
+                if let Some(r) = controls_revealer_c.upgrade() {
+                    r.set_reveal_child(true);
                 }
                 if let Some(sv) = split_view_c.upgrade() {
                     if let Some(btn) = playlist_btn_c.upgrade() {
@@ -586,7 +604,8 @@ impl MediaWindow {
         // ── Polling timeout: sync controls, auto-advance, auto-hide ───────
         let window_weak = window.downgrade();
         let toolbar_view_weak = toolbar_view.downgrade();
-        let controls_widget_weak = controls.widget().downgrade();
+        let controls_revealer_weak = controls_revealer.downgrade();
+        let mouse_over_controls_c = mouse_over_controls.clone();
         let split_view_weak = split_view.downgrade();
         let playlist_btn_weak = header.playlist_btn.downgrade();
         let state_c = state.clone();
@@ -818,14 +837,16 @@ impl MediaWindow {
             if let Some(win) = window_weak.upgrade() {
                 win.set_title(Some("Aurora Media Player"));
 
+                let idle_secs = last_motion.get().elapsed().as_secs_f64();
+                let hide_after = if mouse_over_controls_c.get() { 5.0 } else { 2.0 };
+
                 if win.property::<bool>("fullscreened") {
-                    let idle_secs = last_motion.get().elapsed().as_secs_f64();
-                    if idle_secs > 2.0 {
+                    if idle_secs > hide_after {
                         if let Some(tv) = toolbar_view_weak.upgrade() {
                             tv.set_reveal_top_bars(false);
                         }
-                        if let Some(cw) = controls_widget_weak.upgrade() {
-                            cw.set_visible(false);
+                        if let Some(r) = controls_revealer_weak.upgrade() {
+                            r.set_reveal_child(false);
                         }
                         if let Some(sv) = split_view_weak.upgrade() {
                             sv.set_show_sidebar(false);
@@ -841,15 +862,14 @@ impl MediaWindow {
                     if let Some(tv) = toolbar_view_weak.upgrade() {
                         tv.set_reveal_top_bars(true);
                     }
-                    // Hide bottom controls after 2s of inactivity, same as fullscreen.
-                    let idle_secs = last_motion.get().elapsed().as_secs_f64();
-                    if idle_secs > 2.0 && !idle {
-                        if let Some(cw) = controls_widget_weak.upgrade() {
-                            cw.set_visible(false);
+                    // Hide bottom controls after 2s (or 5s if mouse is over controls).
+                    if idle_secs > hide_after && !idle {
+                        if let Some(r) = controls_revealer_weak.upgrade() {
+                            r.set_reveal_child(false);
                         }
                     } else {
-                        if let Some(cw) = controls_widget_weak.upgrade() {
-                            cw.set_visible(true);
+                        if let Some(r) = controls_revealer_weak.upgrade() {
+                            r.set_reveal_child(true);
                         }
                         if let Some(sv) = split_view_weak.upgrade() {
                             if let Some(btn) = playlist_btn_weak.upgrade() {

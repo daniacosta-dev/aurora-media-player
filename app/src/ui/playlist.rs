@@ -32,24 +32,42 @@ fn fmt_duration(total_secs: u64) -> String {
     if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
 }
 
-/// Probe duration via ffprobe in a background thread; update label when done.
-/// WeakRef<Label> stays on the main thread — only f64 crosses the boundary.
+/// Probe duration via ffprobe (local files) or yt-dlp (URLs) in a background
+/// thread; update label when done.
 fn probe_duration_async(path: PathBuf, label: Label) {
     let weak = label.downgrade();
     let (tx, rx) = std::sync::mpsc::channel::<Option<f64>>();
 
     std::thread::spawn(move || {
-        let duration = std::process::Command::new("ffprobe")
-            .args([
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-            ])
-            .arg(&path)
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|s| s.trim().parse::<f64>().ok());
+        let path_str = path.to_string_lossy();
+        let is_url = path_str.starts_with("http://") || path_str.starts_with("https://");
+
+        let duration = if is_url {
+            // Resolve duration via yt-dlp without downloading the media.
+            // Honour the snap bundle path the same way mpv.rs does.
+            let ytdlp = std::env::var("SNAP")
+                .map(|s| format!("{}/usr/bin/yt-dlp", s))
+                .unwrap_or_else(|_| "yt-dlp".to_string());
+            std::process::Command::new(&ytdlp)
+                .args(["--print", "duration", "--no-warnings", "--quiet"])
+                .arg(path_str.as_ref())
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|s| s.trim().parse::<f64>().ok())
+        } else {
+            std::process::Command::new("ffprobe")
+                .args([
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                ])
+                .arg(&path)
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|s| s.trim().parse::<f64>().ok())
+        };
         tx.send(duration).ok();
     });
 
@@ -126,6 +144,7 @@ fn make_row(
         .valign(gtk::Align::Center)
         .build();
     remove_btn.set_opacity(0.0);
+    remove_btn.set_cursor_from_name(Some("pointer"));
 
     content.append(&track_num);
     content.append(&title_lbl);

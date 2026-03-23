@@ -1,5 +1,30 @@
 /* Aurora Media Player — custom stylesheet */
 
+
+/* ── File menu dropdown ─────────────────────────────────────────────────────── */
+.file-menu-popover {
+    min-width: 280px;
+    padding: 2px 0;
+}
+
+button.file-menu-item {
+    padding: 0;
+    border-radius: 6px;
+    min-height: 32px;
+}
+
+button.file-menu-item:hover {
+    background-color: alpha(@accent_color, 0.15);
+}
+
+button.file-menu-item image {
+    opacity: 1;
+    min-width: 16px;
+    min-height: 16px;
+    -gtk-icon-size: 16px;
+}
+
+
 /* ── Controls bar — floating card (theme-adaptive) ─────────────────────────── */
 /* Uses libadwaita named colors so the card is white in light mode and
    dark in dark mode, with buttons and labels inheriting the correct theme color. */
@@ -10,6 +35,15 @@
     border-radius: 16px;
     border: 1px solid alpha(@window_fg_color, 0.08);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.30);
+}
+
+/* ── Seek bar hover label ───────────────────────────────────────────────────── */
+.seek-hover-label {
+    background-color: alpha(@window_bg_color, 0.92);
+    border-radius: 6px;
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    padding: 2px 8px;
+    font-size: 0.8em;
 }
 
 /* ── Seek bar ───────────────────────────────────────────────────────────────── */

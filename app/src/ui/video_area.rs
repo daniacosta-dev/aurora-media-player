@@ -304,7 +304,16 @@ impl VideoArea {
     /// Switch to the audio-info page and populate the metadata labels.
     pub fn show_audio(&self, title: &str, artist: &str, album: &str) {
         self.stack.set_visible_child_name("audio");
-        self.audio_title.set_label(if title.is_empty() { "Unknown Track" } else { title });
+        // While yt-dlp is resolving a URL, mpv's media-title can be:
+        //   - the full URL  ("https://youtube.com/watch?v=…")
+        //   - the path fragment ("watch?v=UGua3…&list=…")
+        //   - the hostname   ("youtube.com")
+        // All of these look like URL noise — show a clean placeholder instead.
+        let is_url_noise = title.starts_with("http://")
+            || title.starts_with("https://")
+            || (title.contains('?') && title.contains('=') && !title.contains(' '));
+        let display = if is_url_noise { "Loading…" } else if title.is_empty() { "Unknown Track" } else { title };
+        self.audio_title.set_label(display);
         self.audio_artist.set_label(artist);
         self.audio_artist.set_visible(!artist.is_empty());
         self.audio_album.set_label(album);

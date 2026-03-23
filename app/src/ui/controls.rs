@@ -77,33 +77,59 @@ impl PlayerControls {
             });
         }
 
-        // Hover tooltip: show chapter name
-        {
-            let data_c = chapter_data.clone();
-            let seek_bar_c = seek_bar.downgrade();
-            let motion = gtk::EventControllerMotion::new();
-            motion.connect_motion(move |_, x, _| {
-                let Some(sb) = seek_bar_c.upgrade() else { return };
-                let w = sb.width() as f64;
-                if w <= 0.0 { return; }
-                let frac = (x / w).clamp(0.0, 1.0);
-                let (dur, chapters) = &*data_c.borrow();
-                if *dur <= 0.0 || chapters.is_empty() {
-                    sb.set_tooltip_text(None);
-                    return;
-                }
-                let pos_secs = frac * dur;
-                let name = chapters.iter().rev()
-                    .find(|(_, t)| *t <= pos_secs)
-                    .map(|(n, _)| n.as_str());
-                sb.set_tooltip_text(name);
-            });
-            seek_bar.add_controller(motion);
-        }
-
         let seek_outer = Overlay::new();
         seek_outer.set_child(Some(&seek_bar));
         seek_outer.add_overlay(&chapter_overlay);
+
+        // ── Hover time label ──────────────────────────────────────────────
+        // Sits in the root Box ABOVE the seek bar so it never overlaps the
+        // trough. opacity=0/1 is used instead of visible so layout is stable.
+        let hover_label = Label::builder()
+            .css_classes(["seek-hover-label"])
+            .halign(gtk::Align::Start)
+            .opacity(0.0)
+            .build();
+
+        {
+            let data_c = chapter_data.clone();
+            let lbl_w  = hover_label.downgrade();
+            let sb_w   = seek_bar.downgrade();
+            let mc     = gtk::EventControllerMotion::new();
+
+            mc.connect_enter({
+                let lbl = hover_label.downgrade();
+                move |_, _, _| { if let Some(l) = lbl.upgrade() { l.set_opacity(1.0); } }
+            });
+            mc.connect_leave({
+                let lbl = hover_label.downgrade();
+                move |_| { if let Some(l) = lbl.upgrade() { l.set_opacity(0.0); } }
+            });
+            mc.connect_motion(move |_, x, _| {
+                let (Some(l), Some(sb)) = (lbl_w.upgrade(), sb_w.upgrade()) else { return };
+                let w = sb.width() as f64;
+                if w <= 0.0 { return; }
+                let (dur, chapters) = &*data_c.borrow();
+                if *dur <= 0.0 { return; }
+
+                // GTK Scale maps the full widget width to [min, max] linearly.
+                let frac = (x / w).clamp(0.0, 1.0);
+                let pos_secs = frac * dur;
+                let time_str = format_time(pos_secs as u64);
+
+                let near_mark = chapters.iter()
+                    .find(|(_, t)| ((t / dur) * w - x).abs() < 8.0)
+                    .map(|(n, _)| n.as_str());
+
+                l.set_label(&match near_mark {
+                    Some(name) => format!("{name}\n{time_str}"),
+                    None       => time_str,
+                });
+                let lbl_half = (l.width() as f64 / 2.0).max(24.0);
+                let margin = (x - lbl_half).max(0.0).min(w - lbl_half * 2.0) as i32;
+                l.set_margin_start(margin);
+            });
+            seek_bar.add_controller(mc);
+        }
 
         // ── Time labels ───────────────────────────────────────────────────
         let time_row = Box::builder()
@@ -265,6 +291,24 @@ impl PlayerControls {
         end_row.append(&center_btns);
         end_row.append(&vol_box);
 
+        // Pointer cursor on all interactive controls
+        for w in [
+            prev_btn.upcast_ref::<gtk::Widget>(),
+            play_btn.upcast_ref(),
+            next_btn.upcast_ref(),
+            repeat_btn.upcast_ref(),
+            shuffle_btn.upcast_ref(),
+            vol_btn.upcast_ref(),
+            screenshot_btn.upcast_ref(),
+            speed_btn.upcast_ref(),
+            tracks_btn.upcast_ref(),
+            seek_bar.upcast_ref(),
+            vol_slider.upcast_ref(),
+        ] {
+            w.set_cursor_from_name(Some("pointer"));
+        }
+
+        root.append(&hover_label);
         root.append(&seek_outer);
         root.append(&time_row);
         root.append(&end_row);

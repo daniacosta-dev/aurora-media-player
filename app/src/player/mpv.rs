@@ -53,6 +53,7 @@ impl MpvPlayer {
         .map_err(|e| anyhow::anyhow!("{:?}", e))?;
 
         mpv.set_property("hwdec", "auto-safe").ok();
+        mpv.set_property("hr-seek", "yes").ok();
         mpv.set_property("volume", 100.0_f64).ok();
         mpv.set_property("keep-open", "yes").ok();
         mpv.set_property("ytdl", true).ok();
@@ -66,6 +67,8 @@ impl MpvPlayer {
 
         // Disable mpv's built-in OSD/input — we build our own.
         mpv.set_property("osc", false).ok();
+        mpv.set_property("osd-bar", false).ok();
+        mpv.set_property("osd-level", 0i64).ok();
         mpv.set_property("input-default-bindings", false).ok();
         mpv.set_property("input-vo-keyboard", false).ok();
 
