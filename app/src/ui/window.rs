@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
@@ -12,7 +13,7 @@ use gdk4;
 
 use crate::library::scan_directory;
 use crate::mpris::{MprisCommand, MprisState};
-use crate::player::{PlayerCommand, RepeatMode};
+use crate::player::{PlayerCommand, MpvSnapshot, RepeatMode};
 use crate::state::{PlayerState, SharedState};
 
 use super::{
@@ -227,30 +228,140 @@ impl MediaWindow {
         let state = PlayerState::create();
 
         // ── Restore global volume/mute from settings ──────────────────────
-        {
+        let fixed_mode = {
             let settings = super::headerbar::load_app_settings();
             if let Some(p) = state.borrow().player.as_ref() {
                 p.execute(PlayerCommand::SetVolume(settings.volume)).ok();
                 p.execute(PlayerCommand::Mute(settings.muted)).ok();
             }
             state.borrow_mut().muted = settings.muted;
+            settings.ui_mode.as_deref() == Some("fixed")
+        };
+
+        // ── Background mpv snapshot thread ────────────────────────────────
+        // Reads all commonly-polled mpv properties on a dedicated thread so
+        // the GTK main thread never blocks on mpv IPC (which can stall 1+ s
+        // when mpv buffers IPTV streams).
+        let snapshot: Arc<Mutex<MpvSnapshot>> = Arc::new(Mutex::new(MpvSnapshot::idle_defaults()));
+        if let Some(poller) = state.borrow().player.as_ref().map(|p| p.make_poller()) {
+            let snapshot_bg = snapshot.clone();
+            std::thread::spawn(move || loop {
+                let snap = poller.read_snapshot();
+                if let Ok(mut g) = snapshot_bg.lock() { *g = snap; }
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            });
         }
 
         // ── Root window ───────────────────────────────────────────────────
+        // In fixed mode the control bar (~95 px) is always visible, so the
+        // default and minimum heights need to be larger to avoid clipping.
+        // Minimum height: header ~47px + video min 120px + controls ~95px (fixed) or ~85px (floating)
+        let min_height = if fixed_mode { 625 } else { 625 };
         let window = ApplicationWindow::builder()
             .application(app)
-            .title("Aurora Media")
+            .title("Aurora Media Player")
             .default_width(960)
-            .default_height(600)
-            .width_request(480)
-            .height_request(320)
+            .default_height(if fixed_mode { 695 } else { 600 })
             .build();
+        window.set_size_request(480, min_height);
 
         // ── UI components ─────────────────────────────────────────────────
+        // toast_overlay is created early so the screenshot callback can reference it.
+        let toast_overlay = ToastOverlay::new();
+
         // Playlist is created first so it can be referenced in the header callback.
         let playlist = Rc::new(PlaylistPanel::new(state.clone()));
         let video = VideoArea::new(state.clone());
-        let controls = Rc::new(PlayerControls::new(state.clone()));
+        let controls = Rc::new(PlayerControls::new(state.clone(), {
+            let toast_w = toast_overlay.downgrade();
+            move || {
+                if let Some(t) = toast_w.upgrade() {
+                    t.add_toast(adw::Toast::new("Screenshot saved"));
+                }
+            }
+        }));
+        controls.apply_layout(fixed_mode);
+
+        // ── Layout ────────────────────────────────────────────────────────
+        // (fixed_mode already determined above, before window creation)
+        let is_fixed_mode: Rc<Cell<bool>> = Rc::new(Cell::new(fixed_mode));
+
+        // Always create the revealer; in fixed mode it starts detached from the tree.
+        let controls_revealer = gtk::Revealer::builder()
+            .transition_type(gtk::RevealerTransitionType::SlideUp)
+            .transition_duration(220)
+            .reveal_child(true)
+            .valign(gtk::Align::End)
+            .build();
+
+        let video_controls = gtk::Overlay::builder()
+            .child(video.widget())
+            .hexpand(true)
+            .vexpand(true)
+            .height_request(120)
+            .build();
+
+        // Initial floating setup: controls inside revealer, overlaid on video.
+        if !fixed_mode {
+            controls.widget().set_valign(gtk::Align::End);
+            controls_revealer.set_child(Some(controls.widget()));
+            video_controls.add_overlay(&controls_revealer);
+            // Clip the controls revealer to the video area so it never bleeds into the playlist.
+            video_controls.set_clip_overlay(&controls_revealer, true);
+        }
+
+        let split_view = OverlaySplitView::builder()
+            .sidebar(playlist.widget())
+            .content(&video_controls)
+            .sidebar_position(gtk::PackType::End)
+            .sidebar_width_fraction(0.28)
+            .show_sidebar(false)
+            .build();
+
+        // Always use a VBox outer container so we can append controls below in fixed mode.
+        let outer_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .hexpand(true)
+            .vexpand(true)
+            .build();
+
+        // Initial fixed setup: controls below the toolbar_view, with flat CSS.
+        if fixed_mode {
+            controls.widget().add_css_class("controls-bar-fixed");
+        }
+
+        // ── Dynamic mode switching callback ─────────────────────────────────
+        let controls_for_layout = controls.clone();
+        let on_ui_mode_change: Rc<dyn Fn(&str)> = {
+            let is_fixed_mode = is_fixed_mode.clone();
+            let controls_revealer = controls_revealer.clone();
+            let video_controls = video_controls.clone();
+            let outer_box = outer_box.clone();
+            let controls_widget = controls.widget().clone();
+            Rc::new(move |mode: &str| {
+                let now_fixed = mode == "fixed";
+                if now_fixed == is_fixed_mode.get() { return; }
+                is_fixed_mode.set(now_fixed);
+                controls_for_layout.apply_layout(now_fixed);
+                if now_fixed {
+                    // Floating → Fixed: unparent from revealer, add to outer_box
+                    controls_revealer.set_child(None::<&gtk::Widget>);
+                    video_controls.remove_overlay(&controls_revealer);
+                    controls_widget.add_css_class("controls-bar-fixed");
+                    outer_box.append(&controls_widget);
+                } else {
+                    // Fixed → Floating: unparent from outer_box, put back in revealer
+                    outer_box.remove(&controls_widget);
+                    controls_widget.remove_css_class("controls-bar-fixed");
+                    controls_widget.set_valign(gtk::Align::End);
+                    controls_revealer.set_child(Some(&controls_widget));
+                    controls_revealer.set_reveal_child(true);
+                    video_controls.add_overlay(&controls_revealer);
+                    video_controls.set_clip_overlay(&controls_revealer, true);
+                }
+            })
+        };
+
         let header = {
             let state_file = state.clone();
             let playlist_file = playlist.clone();
@@ -290,58 +401,41 @@ impl MediaWindow {
                     let state_recent = state.clone();
                     let playlist_recent = playlist.clone();
                     move |path: PathBuf| {
-                        if is_m3u(&path) {
+                        let is_url = {
+                            let s = path.to_string_lossy();
+                            s.starts_with("http://") || s.starts_with("https://")
+                        };
+                        if !is_url && is_m3u(&path) {
                             let items = parse_m3u(&path);
                             if !items.is_empty() {
                                 load_playlist_items(items, &state_recent, &playlist_recent, true);
                             }
                         } else {
-                            let title = path.file_stem()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("?")
-                                .to_string();
+                            let title = title_for_path(&path);
                             load_playlist_items(vec![(title, path)], &state_recent, &playlist_recent, true);
                         }
                     }
                 },
+                on_ui_mode_change,
             )
         };
 
         let push_recent = header.push_recent_fn.clone();
 
-        // ── Layout ────────────────────────────────────────────────────────
-        // Controls float over video so in fullscreen they can hide without
-        // shrinking the video area.
-        controls.widget().set_valign(gtk::Align::End);
-        let controls_revealer = gtk::Revealer::builder()
-            .transition_type(gtk::RevealerTransitionType::SlideUp)
-            .transition_duration(220)
-            .reveal_child(true)
-            .valign(gtk::Align::End)
-            .child(controls.widget())
-            .build();
-        let video_controls = gtk::Overlay::builder()
-            .child(video.widget())
-            .hexpand(true)
-            .vexpand(true)
-            .build();
-        video_controls.add_overlay(&controls_revealer);
-
-        let split_view = OverlaySplitView::builder()
-            .sidebar(playlist.widget())
-            .content(&video_controls)
-            .sidebar_position(gtk::PackType::End)
-            .sidebar_width_fraction(0.28)
-            .show_sidebar(false)
-            .build();
-
         let toolbar_view = ToolbarView::builder()
             .content(&split_view)
             .build();
+        toolbar_view.set_vexpand(true);
         toolbar_view.add_top_bar(header.widget());
 
-        let toast_overlay = ToastOverlay::new();
-        toast_overlay.set_child(Some(&toolbar_view));
+        outer_box.append(&toolbar_view);
+
+        // In fixed mode, append controls below the toolbar_view.
+        if fixed_mode {
+            outer_box.append(controls.widget());
+        }
+
+        toast_overlay.set_child(Some(&outer_box));
         window.set_content(Some(&toast_overlay));
 
         // ── Playlist toggle ───────────────────────────────────────────────
@@ -710,15 +804,21 @@ impl MediaWindow {
 
         // ── Fast position timer: seek bar + time labels at 50 ms ─────────
         {
-            let state_c = state.clone();
             let controls_c = controls.clone();
+            let pos_tick = Rc::new(Cell::new(0u8));
+            let snapshot_50 = snapshot.clone();
             glib::timeout_add_local(Duration::from_millis(50), move || {
-                let s = state_c.borrow();
-                if let Some(p) = s.player.as_ref() {
-                    let pos = p.position().unwrap_or(0.0);
-                    let dur = p.duration().unwrap_or(0.0);
-                    drop(s);
-                    controls_c.update_position(pos, dur);
+                let snap = match snapshot_50.lock() {
+                    Ok(g) => g.clone(),
+                    Err(_) => return glib::ControlFlow::Continue,
+                };
+                if snap.idle { return glib::ControlFlow::Continue; }
+                let tick = pos_tick.get().wrapping_add(1);
+                pos_tick.set(tick);
+                // Active: every tick (50 ms).
+                // Paused: every 10th tick (500 ms) — position is static, no need for 20 fps.
+                if !snap.paused || tick % 10 == 0 {
+                    controls_c.update_position(snap.pos, snap.dur);
                 }
                 glib::ControlFlow::Continue
             });
@@ -728,6 +828,7 @@ impl MediaWindow {
         let window_weak = window.downgrade();
         let toolbar_view_weak = toolbar_view.downgrade();
         let controls_revealer_weak = controls_revealer.downgrade();
+        let is_fixed_mode_c = is_fixed_mode.clone();
         let mouse_over_controls_c = mouse_over_controls.clone();
         let split_view_weak = split_view.downgrade();
         let playlist_btn_weak = header.playlist_btn.downgrade();
@@ -754,35 +855,40 @@ impl MediaWindow {
         // Detect frozen playback (post-seek buffer stall) by watching time-pos.
         let prev_pos = Rc::new(Cell::new(-1.0_f64));
         let stuck_ticks = Rc::new(Cell::new(0u32));
+        // Throttle expensive mpv IPC calls: track_list (every 10 ticks=2s), chapters (every 5=1s).
+        let slow_tick = Rc::new(Cell::new(0u32));
+        // Debounce volume/mute disk writes: only flush after N ticks of no further changes.
+        let settings_save_cooldown = Rc::new(Cell::new(0u32));
+        let snapshot_200 = snapshot.clone();
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
+            let _tick_start = std::time::Instant::now();
+            // Read mpv properties from the background-thread snapshot — no blocking IPC.
             let (pos, dur, paused, muted, volume, speed, title, idle, has_video,
-                 artist, album, eof, pending_seek, repeat_mode, shuffle, buffering, seeking,
-                 podcast_mode) = {
+                 artist, album, eof, buffering, seeking) = {
+                let snap = match snapshot_200.lock() {
+                    Ok(g) => g.clone(),
+                    Err(_) => return glib::ControlFlow::Continue,
+                };
+                (snap.pos, snap.dur, snap.paused, snap.muted, snap.volume, snap.speed,
+                 snap.title, snap.idle, snap.has_video,
+                 snap.artist.unwrap_or_default(), snap.album.unwrap_or_default(),
+                 snap.eof, snap.buffering, snap.seeking)
+            };
+            // Read Rust-side state (no mpv IPC — always fast).
+            let (pending_seek, repeat_mode, shuffle, podcast_mode, has_prev, has_next) = {
                 let s = state_c.borrow();
-                match s.player.as_ref() {
-                    None => return glib::ControlFlow::Continue,
-                    Some(p) => (
-                        p.position().unwrap_or(0.0),
-                        p.duration().unwrap_or(0.0),
-                        p.is_paused(),
-                        p.is_muted(),
-                        p.volume(),
-                        p.speed(),
-                        p.media_title(),
-                        p.is_idle(),
-                        p.has_video(),
-                        p.metadata_artist().unwrap_or_default(),
-                        p.metadata_album().unwrap_or_default(),
-                        p.eof_reached(),
-                        s.pending_seek,
-                        s.repeat_mode,
-                        s.shuffle,
-                        p.is_buffering(),
-                        p.is_seeking(),
-                        s.podcast_mode,
-                    ),
-                }
+                if s.player.is_none() { return glib::ControlFlow::Continue; }
+                let cur = s.current_idx;
+                let has_prev = !idle && cur.map(|i| {
+                    if s.shuffle {
+                        s.shuffle_order.iter().position(|&x| x == i).map(|p| p > 0).unwrap_or(false)
+                    } else {
+                        i > 0
+                    }
+                }).unwrap_or(false);
+                let has_next = !idle && cur.map(|i| s.effective_next_idx(i).is_some()).unwrap_or(false);
+                (s.pending_seek, s.repeat_mode, s.shuffle, s.podcast_mode, has_prev, has_next)
             };
 
             // ── Playback error detection ────────────────────────────────
@@ -801,13 +907,22 @@ impl MediaWindow {
             prev_idle.set(idle);
 
             // ── Persist volume/mute to global settings when they change ──
+            // Debounced: start a countdown on change, flush to disk only when it expires.
+            // Avoids a disk read+write on the GTK main thread every 200 ms during volume drag.
             if (volume - last_saved_volume.get()).abs() > 0.5 || muted != last_saved_muted.get() {
                 last_saved_volume.set(volume);
                 last_saved_muted.set(muted);
-                let mut s = super::headerbar::load_app_settings();
-                s.volume = volume;
-                s.muted = muted;
-                super::headerbar::save_app_settings(&s);
+                settings_save_cooldown.set(5); // flush after ~1 s of no further changes
+            }
+            let cd = settings_save_cooldown.get();
+            if cd > 0 {
+                settings_save_cooldown.set(cd - 1);
+                if cd == 1 {
+                    let mut s = super::headerbar::load_app_settings();
+                    s.volume = last_saved_volume.get();
+                    s.muted = last_saved_muted.get();
+                    super::headerbar::save_app_settings(&s);
+                }
             }
 
             // ── Push to recent files when playback starts ───────────────
@@ -821,9 +936,10 @@ impl MediaWindow {
                         if path_str.starts_with("http://") || path_str.starts_with("https://") {
                             recent_pending_idx.set(Some(idx));
                         } else {
-                            let display_title = title.as_deref()
-                                .unwrap_or_else(|| path.file_stem().and_then(|s| s.to_str()).unwrap_or("?"));
-                            push_recent_c(path, display_title);
+                            // Use the file stem — mpv's media_title may still reflect
+                            // the previous file at this early idle→playing transition.
+                            let display_title = title_for_path(path);
+                            push_recent_c(path, &display_title);
                         }
                     }
                 }
@@ -888,7 +1004,7 @@ impl MediaWindow {
                 }
             }
 
-            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle, podcast_mode);
+            controls_c.update(pos, dur, paused, muted, volume, speed, idle, has_video, repeat_mode, shuffle, podcast_mode, has_prev, has_next);
 
             // ── Header title / subtitle ─────────────────────────────────
             {
@@ -903,27 +1019,42 @@ impl MediaWindow {
                         window_title_c.set_subtitle("");
                     }
                     Some(name) => {
-                        window_title_c.set_title(&format!("Aurora — {name}"));
+                        window_title_c.set_title(&format!("Aurora Media Player — {name}"));
                         window_title_c.set_subtitle(&artist);
                     }
                 }
             }
 
-            // ── Tracks (audio + subtitles) ──────────────────────────────
-            let tracks = {
-                let s = state_c.borrow();
-                s.player.as_ref().map(|p| p.track_list()).unwrap_or_default()
-            };
-            controls_c.update_tracks(tracks, &state_c);
+            // ── Slow-tick counter for throttled IPC calls ───────────────
+            let tick = slow_tick.get().wrapping_add(1);
+            slow_tick.set(tick);
 
-            // ── Chapter marks on seek bar ───────────────────────────────
-            let chapters = {
-                let s = state_c.borrow();
-                s.player.as_ref().filter(|_| !idle)
-                    .map(|p| p.chapter_list())
-                    .unwrap_or_default()
-            };
-            controls_c.update_chapters(chapters, dur);
+            // ── Tracks (audio + subtitles) — every ~2 s ─────────────────
+            // track_list() is an mpv IPC call; no need to query it 5×/sec.
+            if tick % 10 == 0 {
+                let t0 = std::time::Instant::now();
+                let tracks = {
+                    let s = state_c.borrow();
+                    s.player.as_ref().map(|p| p.track_list()).unwrap_or_default()
+                };
+                let elapsed = t0.elapsed().as_millis();
+                if elapsed > 20 { log::warn!("[perf] track_list() took {}ms", elapsed); }
+                controls_c.update_tracks(tracks, &state_c);
+            }
+
+            // ── Chapter marks on seek bar — every ~1 s ──────────────────
+            if tick % 5 == 0 {
+                let t0 = std::time::Instant::now();
+                let chapters = {
+                    let s = state_c.borrow();
+                    s.player.as_ref().filter(|_| !idle)
+                        .map(|p| p.chapter_list())
+                        .unwrap_or_default()
+                };
+                let elapsed = t0.elapsed().as_millis();
+                if elapsed > 20 { log::warn!("[perf] chapter_list() took {}ms", elapsed); }
+                controls_c.update_chapters(chapters, dur);
+            }
 
             // ── Update URL playlist row title once mpv/yt-dlp resolves it ─
             // Only replace if the title is still the hostname fallback — don't
@@ -1017,8 +1148,10 @@ impl MediaWindow {
                         if let Some(tv) = toolbar_view_weak.upgrade() {
                             tv.set_reveal_top_bars(false);
                         }
-                        if let Some(r) = controls_revealer_weak.upgrade() {
-                            r.set_reveal_child(false);
+                        if !is_fixed_mode_c.get() {
+                            if let Some(r) = controls_revealer_weak.upgrade() {
+                                r.set_reveal_child(false);
+                            }
                         }
                         if let Some(sv) = split_view_weak.upgrade() {
                             sv.set_show_sidebar(false);
@@ -1030,22 +1163,22 @@ impl MediaWindow {
                         win.set_cursor(None::<&gdk4::Cursor>);
                     }
                 } else {
-                    // Header always visible outside fullscreen (it's the window chrome).
                     if let Some(tv) = toolbar_view_weak.upgrade() {
                         tv.set_reveal_top_bars(true);
                     }
-                    // Hide bottom controls after 2s (or 5s if mouse is over controls).
-                    if idle_secs > hide_after && !idle {
-                        if let Some(r) = controls_revealer_weak.upgrade() {
-                            r.set_reveal_child(false);
-                        }
-                    } else {
-                        if let Some(r) = controls_revealer_weak.upgrade() {
-                            r.set_reveal_child(true);
-                        }
-                        if let Some(sv) = split_view_weak.upgrade() {
-                            if let Some(btn) = playlist_btn_weak.upgrade() {
-                                sv.set_show_sidebar(btn.is_active());
+                    if !is_fixed_mode_c.get() {
+                        if idle_secs > hide_after && !idle {
+                            if let Some(r) = controls_revealer_weak.upgrade() {
+                                r.set_reveal_child(false);
+                            }
+                        } else {
+                            if let Some(r) = controls_revealer_weak.upgrade() {
+                                r.set_reveal_child(true);
+                            }
+                            if let Some(sv) = split_view_weak.upgrade() {
+                                if let Some(btn) = playlist_btn_weak.upgrade() {
+                                    sv.set_show_sidebar(btn.is_active());
+                                }
                             }
                         }
                     }
@@ -1147,6 +1280,31 @@ impl MediaWindow {
                     can_go_next: can_next,
                     can_go_previous: can_prev,
                 });
+            }
+
+            // ── Perf: warn if this tick took too long (blocks GTK main loop) ──
+            let tick_ms = _tick_start.elapsed().as_millis();
+            if tick_ms > 50 {
+                log::warn!("[perf] 200ms tick took {}ms — main thread stall!", tick_ms);
+            }
+
+            // ── Periodic stats dump every ~30 s (150 ticks) ─────────────
+            if tick % 150 == 1 {
+                let playlist_len = state_c.borrow().playlist.len();
+                let mem_kb = std::fs::read_to_string("/proc/self/status")
+                    .ok()
+                    .and_then(|s| {
+                        s.lines()
+                            .find(|l| l.starts_with("VmRSS:"))
+                            .and_then(|l| l.split_whitespace().nth(1))
+                            .and_then(|v| v.parse::<u64>().ok())
+                    })
+                    .unwrap_or(0);
+                log::info!(
+                    "[stats] playlist={} items | idle={} | buffering={} | mem={}MB",
+                    playlist_len, idle, buffering,
+                    mem_kb / 1024
+                );
             }
 
             glib::ControlFlow::Continue

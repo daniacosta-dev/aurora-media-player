@@ -31,12 +31,38 @@ button.file-menu-item image {
 .controls-bar {
     padding: 2px 8px 6px;
     margin: 0 16px 12px;
-    background-color: alpha(@window_bg_color, 0.92);
+    background-color: alpha(@sidebar_bg_color, 0.92);
     border-radius: 16px;
     border: 1px solid alpha(@window_fg_color, 0.08);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.30);
 }
 
+/* ── Controls bar — fixed / classic mode ────────────────────────────────────── */
+/* Flat, integrated bottom bar — no card chrome. */
+.controls-bar-fixed {
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+    border: none;
+    border-top: 1px solid alpha(@window_fg_color, 0.09);
+    padding: 4px 0 4px;
+    background-color: @sidebar_bg_color;
+}
+
+
+/* ── Volume percentage label ─────────────────────────────────────────────────── */
+.vol-pct {
+    min-width: 32px;
+    opacity: 0.6;
+}
+
+/* ── Toggle buttons (repeat, shuffle, podcast) ──────────────────────────────── */
+/* Inactive: flat, no background. Active: accent tint pill. */
+.toggle-active {
+    background-color: alpha(@accent_color, 0.15);
+    color: @accent_color;
+    border-radius: 6px;
+}
 /* ── Seek bar hover label ───────────────────────────────────────────────────── */
 .seek-hover-label {
     background-color: alpha(@window_bg_color, 0.92);
@@ -129,6 +155,25 @@ label.playlist-duration {
     background-color: rgba(0, 0, 0, 0.55);
     border-radius: 9999px;
     padding: 14px;
+}
+
+/* ── Recent files — remove button ───────────────────────────────────────────── */
+/* Hidden by default; fades in when the row is hovered. */
+.recent-remove-btn {
+    padding: 2px;
+    min-width: 24px;
+    min-height: 24px;
+    -gtk-icon-size: 12px;
+    opacity: 0;
+    transition: opacity 150ms ease;
+}
+
+.recent-row:hover .recent-remove-btn {
+    opacity: 0.6;
+}
+
+.recent-row:hover .recent-remove-btn:hover {
+    opacity: 1;
 }
 
 /* ── Audio-only view ────────────────────────────────────────────────────────── */

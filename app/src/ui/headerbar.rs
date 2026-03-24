@@ -66,6 +66,7 @@ impl MediaHeaderBar {
         on_url_playlist: impl Fn(Vec<(String, String)>) + 'static,
         on_open_subtitle: impl Fn(PathBuf) + 'static,
         on_open_recent: impl Fn(PathBuf) + 'static,
+        on_ui_mode_change: Rc<dyn Fn(&str)>,
     ) -> Self {
         let header = HeaderBar::new();
 
@@ -134,12 +135,20 @@ impl MediaHeaderBar {
             btn
         };
 
+        let screenshot_folder_btn = mk_item("camera-photo-symbolic",  "Open Screenshot Folder");
+        let report_issue_btn      = mk_item("bug-symbolic",            "Report Issue");
+        report_issue_btn.set_cursor_from_name(Some("pointer"));
+
         menu_box.append(&open_file_btn);
         menu_box.append(&open_url_btn);
         menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         menu_box.append(&open_sub_btn);
         menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         menu_box.append(&recent_row_btn);
+        menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        menu_box.append(&screenshot_folder_btn);
+        menu_box.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        menu_box.append(&report_issue_btn);
 
         // ── Recent sub-popover ─────────────────────────────────────────────────
         // Parented to recent_row_btn (inside file_popover) so autohide on the
@@ -173,13 +182,25 @@ impl MediaHeaderBar {
         }
 
         // Hover any other item → close sub
-        for btn in [&open_file_btn, &open_url_btn, &open_sub_btn] {
+        for btn in [&open_file_btn, &open_url_btn, &open_sub_btn, &screenshot_folder_btn, &report_issue_btn] {
             let rs = recent_sub.downgrade();
             let mc = gtk::EventControllerMotion::new();
             mc.connect_enter(move |_, _, _| {
                 if let Some(r) = rs.upgrade() { r.popdown(); }
             });
             btn.add_controller(mc);
+        }
+
+        // Report Issue → open GitHub issues page in the default browser
+        {
+            let fp = file_popover.downgrade();
+            report_issue_btn.connect_clicked(move |_| {
+                if let Some(f) = fp.upgrade() { f.popdown(); }
+                gio::AppInfo::launch_default_for_uri(
+                    "https://github.com/daniacosta-dev/aurora-media-player/issues",
+                    gio::AppLaunchContext::NONE,
+                ).ok();
+            });
         }
 
         // Main popover closed → also close sub
@@ -245,6 +266,23 @@ impl MediaHeaderBar {
             .unwrap_or_else(|| "system".into());
         adw::StyleManager::default().set_color_scheme(adw_scheme(&saved_scheme));
 
+        // ── Wire: screenshot folder ───────────────────────────────────────
+        {
+            let fp = file_popover.downgrade();
+            screenshot_folder_btn.connect_clicked(move |_| {
+                if let Some(f) = fp.upgrade() { f.popdown(); }
+                if let Some(pic) = dirs::picture_dir() {
+                    let ss = pic.join("Screenshots");
+                    let dir = if ss.exists() { ss.join("Aurora Media Player") }
+                              else { pic.join("Aurora Media Player") };
+                    std::fs::create_dir_all(&dir).ok();
+                    std::process::Command::new("xdg-open")
+                        .arg(dir.to_string_lossy().as_ref())
+                        .spawn().ok();
+                }
+            });
+        }
+
         // ── Pointer cursor on header buttons ──────────────────────────────
         for w in [
             file_btn.upcast_ref::<gtk::Widget>(),
@@ -254,14 +292,18 @@ impl MediaHeaderBar {
             open_url_btn.upcast_ref(),
             open_sub_btn.upcast_ref(),
             recent_row_btn.upcast_ref(),
+            screenshot_folder_btn.upcast_ref(),
         ] {
             w.set_cursor_from_name(Some("pointer"));
         }
 
         // ── Wire: settings ────────────────────────────────────────────────
-        settings_btn.connect_clicked(|btn| {
-            let Some(parent) = btn.root().and_downcast::<gtk::Window>() else { return };
-            show_settings_dialog(&parent);
+        settings_btn.connect_clicked({
+            let cb = on_ui_mode_change.clone();
+            move |btn| {
+                let Some(parent) = btn.root().and_downcast::<gtk::Window>() else { return };
+                show_settings_dialog(&parent, cb.clone());
+            }
         });
 
         // ── Wire: open file ───────────────────────────────────────────────
@@ -370,13 +412,21 @@ impl MediaHeaderBar {
                     rbox.append(&lbl);
                 } else {
                     for entry in entries {
+                        // Outer row — scopes the hover state for the remove button.
+                        let outer = gtk::Box::builder()
+                            .orientation(gtk::Orientation::Horizontal)
+                            .spacing(0)
+                            .css_classes(["recent-row"])
+                            .build();
+
                         let btn = Button::new();
                         btn.add_css_class("flat");
                         btn.add_css_class("file-menu-item");
+                        btn.set_hexpand(true);
                         let row = gtk::Box::builder()
                             .orientation(gtk::Orientation::Horizontal)
                             .spacing(8)
-                            .margin_start(8).margin_end(16)
+                            .margin_start(8).margin_end(8)
                             .margin_top(2).margin_bottom(2)
                             .build();
                         row.append(&gtk::Image::from_icon_name("document-symbolic"));
@@ -398,7 +448,37 @@ impl MediaHeaderBar {
                             if let Some(f) = fp_w.upgrade() { f.popdown(); }
                             on_open_c(path.clone());
                         });
-                        rbox.append(&btn);
+
+                        // Remove button — revealed on hover via CSS.
+                        let remove_btn = Button::from_icon_name("window-close-symbolic");
+                        remove_btn.add_css_class("flat");
+                        remove_btn.add_css_class("circular");
+                        remove_btn.add_css_class("recent-remove-btn");
+                        remove_btn.set_valign(gtk::Align::Center);
+                        remove_btn.set_cursor_from_name(Some("pointer"));
+                        remove_btn.set_tooltip_text(Some("Remove from recents"));
+                        let entry_path = entry.path.clone();
+                        let rbox_w = rbox.clone(); // gtk::Box — already upgraded in this closure
+                        let outer_w: glib::WeakRef<gtk::Box> = outer.downgrade();
+                        remove_btn.connect_clicked(move |_| {
+                            let mut entries = load_recent();
+                            entries.retain(|e| e.path != entry_path);
+                            save_recent(&entries);
+                            if let Some(w) = outer_w.upgrade() { rbox_w.remove(&w); }
+                            if rbox_w.first_child().is_none() {
+                                let lbl = gtk::Label::builder()
+                                    .label("No recent files")
+                                    .margin_start(12).margin_end(12)
+                                    .margin_top(6).margin_bottom(6)
+                                    .css_classes(["dim-label"])
+                                    .build();
+                                rbox_w.append(&lbl);
+                            }
+                        });
+
+                        outer.append(&btn);
+                        outer.append(&remove_btn);
+                        rbox.append(&outer);
                     }
                 }
             })
@@ -432,7 +512,7 @@ impl MediaHeaderBar {
     pub fn set_now_playing(&self, title: Option<&str>, artist: &str) {
         match title {
             None => {
-                self.window_title.set_title("Aurora");
+                self.window_title.set_title("Aurora Media Player");
                 self.window_title.set_subtitle("");
             }
             Some(raw) => {
@@ -488,6 +568,8 @@ pub struct AppSettings {
     pub volume: f64,
     #[serde(default)]
     pub muted: bool,
+    /// "floating" (overlay, auto-hide) | "fixed" (always-visible bottom bar)
+    pub ui_mode: Option<String>,
 }
 
 fn default_volume() -> f64 { 100.0 }
@@ -520,7 +602,7 @@ fn adw_scheme(key: &str) -> adw::ColorScheme {
 
 // ── Settings dialog ───────────────────────────────────────────────────────────
 
-fn show_settings_dialog(parent: &gtk::Window) {
+fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)>) {
     let dialog = adw::Window::builder()
         .title("Settings")
         .transient_for(parent)
@@ -713,12 +795,65 @@ fn show_settings_dialog(parent: &gtk::Window) {
         "If you like Aurora Media Player, consider\n<a href=\"https://github.com/daniacosta-dev/aurora-media-player\">⭐ starring it on GitHub</a>"
     );
 
+    // ── Control bar section ─────────────────────────────────────────────
+    let layout_lbl = gtk::Label::builder()
+        .label("Control bar")
+        .halign(gtk::Align::Start)
+        .css_classes(["heading"])
+        .margin_top(24)
+        .margin_bottom(6)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let saved_ui_mode = load_app_settings()
+        .ui_mode
+        .unwrap_or_else(|| "floating".into());
+
+    let layout_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let layout_row = adw::ActionRow::builder()
+        .title("Control bar style")
+        .build();
+
+    let btn_floating = gtk::ToggleButton::builder()
+        .label("Floating")
+        .active(saved_ui_mode == "floating")
+        .valign(gtk::Align::Center)
+        .build();
+    let btn_fixed = gtk::ToggleButton::builder()
+        .label("Fixed")
+        .active(saved_ui_mode == "fixed")
+        .group(&btn_floating)
+        .valign(gtk::Align::Center)
+        .build();
+
+    let layout_btns = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .css_classes(["linked"])
+        .valign(gtk::Align::Center)
+        .margin_top(8)
+        .margin_bottom(8)
+        .build();
+    layout_btns.append(&btn_floating);
+    layout_btns.append(&btn_fixed);
+
+    layout_row.add_suffix(&layout_btns);
+    layout_list.append(&layout_row);
+
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .margin_bottom(24)
+        .margin_bottom(32)
         .build();
     content.append(&appearance_lbl);
     content.append(&theme_list);
+    content.append(&layout_lbl);
+    content.append(&layout_list);
     content.append(&shortcuts_lbl);
     content.append(&playback_lbl);
     content.append(&playback_list);
@@ -734,6 +869,7 @@ fn show_settings_dialog(parent: &gtk::Window) {
         .vexpand(true)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&content)
+        .margin_bottom(12)
         .build();
 
     let toolbar_view = adw::ToolbarView::new();
@@ -758,6 +894,25 @@ fn show_settings_dialog(parent: &gtk::Window) {
         if btn.is_active() {
             adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
             let mut s = load_app_settings(); s.color_scheme = Some("dark".into()); save_app_settings(&s);
+        }
+    });
+
+    btn_floating.connect_toggled({
+        let cb = on_ui_mode_change.clone();
+        move |btn| {
+            if btn.is_active() {
+                let mut s = load_app_settings(); s.ui_mode = Some("floating".into()); save_app_settings(&s);
+                cb("floating");
+            }
+        }
+    });
+    btn_fixed.connect_toggled({
+        let cb = on_ui_mode_change.clone();
+        move |btn| {
+            if btn.is_active() {
+                let mut s = load_app_settings(); s.ui_mode = Some("fixed".into()); save_app_settings(&s);
+                cb("fixed");
+            }
         }
     });
 
@@ -871,7 +1026,7 @@ fn show_url_playlist_dialog(
     // ── Header ────────────────────────────────────────────────────────────
     let header = adw::HeaderBar::new();
     let play_btn = Button::builder()
-        .label("Play All")
+        .label("Play")
         .css_classes(["suggested-action"])
         .sensitive(false)
         .build();
@@ -1031,12 +1186,35 @@ fn show_url_playlist_dialog(
                 let urls = playlist.urls.clone();
                 let on_load_l = on_load_c.clone();
                 let dialog_l = dialog_c.clone();
-                load_btn.connect_clicked(move |_| {
-                    let items = urls.iter()
-                        .map(|u| (title_for_url(u), u.clone()))
-                        .collect();
-                    on_load_l(items);
-                    dialog_l.close();
+                load_btn.connect_clicked(move |btn| {
+                    // Expand any M3U URLs before loading, same as the editor's Play button.
+                    if urls.iter().any(|u| looks_like_m3u_url(u)) {
+                        btn.set_sensitive(false);
+                        let urls_c = urls.clone();
+                        let (tx, rx) = std::sync::mpsc::channel::<Vec<(String, String)>>();
+                        std::thread::spawn(move || { tx.send(expand_m3u_urls(urls_c)).ok(); });
+                        let on_load_t = on_load_l.clone();
+                        let dialog_t = dialog_l.clone();
+                        let btn_w = btn.downgrade();
+                        glib::timeout_add_local(Duration::from_millis(100), move || {
+                            match rx.try_recv() {
+                                Ok(expanded) => {
+                                    if !expanded.is_empty() { on_load_t(expanded); }
+                                    dialog_t.close();
+                                    glib::ControlFlow::Break
+                                }
+                                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                                Err(_) => {
+                                    if let Some(b) = btn_w.upgrade() { b.set_sensitive(true); }
+                                    glib::ControlFlow::Break
+                                }
+                            }
+                        });
+                    } else {
+                        let items = urls.iter().map(|u| (title_for_url(u), u.clone())).collect();
+                        on_load_l(items);
+                        dialog_l.close();
+                    }
                 });
 
                 let name_d = playlist.name.clone();
@@ -1303,7 +1481,7 @@ fn show_url_playlist_dialog(
                         Err(_) => {
                             if let Some(btn) = play_btn_w2.upgrade() {
                                 btn.set_sensitive(true);
-                                btn.set_label("Play All");
+                                btn.set_label("Play");
                             }
                             glib::ControlFlow::Break
                         }

@@ -32,10 +32,13 @@ pub struct PlayerControls {
     last_tracks: Rc<RefCell<Vec<crate::player::TrackInfo>>>,
     chapter_overlay: DrawingArea,
     chapter_data: Rc<RefCell<(f64, Vec<(String, f64)>)>>,
+    seek_outer: Overlay,
+    hover_label: Label,
+    vol_label: Label,
 }
 
 impl PlayerControls {
-    pub fn new(state: SharedState) -> Self {
+    pub fn new(state: SharedState, on_screenshot: impl Fn() + 'static) -> Self {
         let root = Box::builder()
             .orientation(Orientation::Vertical)
             .css_classes(vec!["toolbar", "controls-bar"])
@@ -133,23 +136,14 @@ impl PlayerControls {
         }
 
         // ── Time labels ───────────────────────────────────────────────────
-        let time_row = Box::builder()
-            .orientation(Orientation::Horizontal)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
         let elapsed = Label::builder()
             .label("0:00")
             .css_classes(vec!["caption"])
             .build();
-        let time_spacer = Box::builder().hexpand(true).build();
         let remaining = Label::builder()
             .label("-0:00")
             .css_classes(vec!["caption"])
             .build();
-        time_row.append(&elapsed);
-        time_row.append(&time_spacer);
-        time_row.append(&remaining);
 
         // ── Playback buttons ──────────────────────────────────────────────
         let prev_btn = Button::builder()
@@ -166,17 +160,16 @@ impl PlayerControls {
         // ── Repeat ────────────────────────────────────────────────────────
         let repeat_btn = Button::builder()
             .icon_name("media-playlist-repeat-symbolic")
-            .css_classes(vec!["repeat-btn"])
+            .css_classes(vec!["flat", "repeat-btn"])
             .build();
 
         // ── Shuffle ───────────────────────────────────────────────────────
         let shuffle_btn = Button::builder()
             .icon_name("media-playlist-shuffle-symbolic")
-            .css_classes(vec!["shuffle-btn"])
+            .css_classes(vec!["flat", "shuffle-btn"])
             .tooltip_text("Shuffle")
             .build();
-        shuffle_btn.set_opacity(0.5); // inactive by default
-
+        
         // ── Volume ────────────────────────────────────────────────────────
         let vol_btn = Button::builder()
             .icon_name("audio-volume-high-symbolic")
@@ -188,14 +181,20 @@ impl PlayerControls {
             .width_request(90)
             .build();
 
+        let vol_label = Label::builder()
+            .label("100%")
+            .css_classes(vec!["caption", "vol-pct"])
+            .width_chars(4)
+            .xalign(1.0)
+            .build();
+
         // ── Podcast mode button ───────────────────────────────────────────
         let podcast_btn = Button::builder()
             .icon_name("audio-headphones-symbolic")
             .tooltip_text("Podcast mode — audio only (saves bandwidth)")
             .css_classes(vec!["flat"])
             .build();
-        podcast_btn.set_opacity(0.5); // inactive by default
-
+        
         // ── Screenshot button ─────────────────────────────────────────────
         let screenshot_btn = Button::builder()
             .icon_name("camera-photo-symbolic")
@@ -260,49 +259,6 @@ impl PlayerControls {
             speed_btn.connect_clicked(move |_| { sp_c.popup(); });
         }
 
-        // ── Layout ────────────────────────────────────────────────────────
-        let end_row = Box::builder()
-            .orientation(Orientation::Horizontal)
-            .margin_start(12)
-            .margin_end(12)
-            .margin_bottom(4)
-            .build();
-
-        let center_btns = Box::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(4)
-            .halign(gtk::Align::Center)
-            .hexpand(true)
-            .build();
-        center_btns.append(&prev_btn);
-        center_btns.append(&play_btn);
-        center_btns.append(&next_btn);
-
-        let vol_box = Box::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(4)
-            .halign(gtk::Align::End)
-            .build();
-        vol_box.append(&tracks_btn);
-        vol_box.append(&speed_btn);
-        vol_box.append(&vol_btn);
-        vol_box.append(&vol_slider);
-
-        let left_box = Box::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(4)
-            .halign(gtk::Align::Start)
-            .hexpand(true)
-            .build();
-        left_box.append(&repeat_btn);
-        left_box.append(&shuffle_btn);
-        left_box.append(&podcast_btn);
-        left_box.append(&screenshot_btn);
-
-        end_row.append(&left_box);
-        end_row.append(&center_btns);
-        end_row.append(&vol_box);
-
         // Pointer cursor on all interactive controls
         for w in [
             prev_btn.upcast_ref::<gtk::Widget>(),
@@ -320,11 +276,6 @@ impl PlayerControls {
         ] {
             w.set_cursor_from_name(Some("pointer"));
         }
-
-        root.append(&hover_label);
-        root.append(&seek_outer);
-        root.append(&time_row);
-        root.append(&end_row);
 
         // ── Signal: podcast mode ─────────────────────────────────────────
         {
@@ -348,6 +299,7 @@ impl PlayerControls {
                 if let Some(p) = state_c.borrow().player.as_ref() {
                     p.execute(PlayerCommand::Screenshot).ok();
                 }
+                on_screenshot();
             });
         }
 
@@ -462,7 +414,7 @@ impl PlayerControls {
             });
         }
 
-        Self {
+        let this = Self {
             root,
             prev_btn,
             play_btn,
@@ -484,6 +436,119 @@ impl PlayerControls {
             last_tracks: Rc::new(RefCell::new(Vec::new())),
             chapter_overlay,
             chapter_data: chapter_data.clone(),
+            seek_outer,
+            hover_label,
+            vol_label,
+        };
+        this.apply_layout(false);
+        this
+    }
+
+    pub fn apply_layout(&self, fixed: bool) {
+        while let Some(child) = self.root.first_child() {
+            self.root.remove(&child);
+        }
+        if fixed {
+            let seek_row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .margin_start(12)
+                .margin_end(12)
+                .margin_top(6)
+                .margin_bottom(2)
+                .build();
+            self.seek_outer.set_hexpand(true);
+            self.elapsed.set_valign(gtk::Align::Center);
+            self.remaining.set_valign(gtk::Align::Center);
+            seek_row.append(&self.elapsed);
+            seek_row.append(&self.seek_outer);
+            seek_row.append(&self.remaining);
+
+            let btn_row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(2)
+                .margin_start(8)
+                .margin_end(8)
+                .margin_bottom(6)
+                .build();
+            btn_row.append(&self.prev_btn);
+            btn_row.append(&self.play_btn);
+            btn_row.append(&self.next_btn);
+            let sp1 = gtk::Box::builder().hexpand(true).build();
+            btn_row.append(&sp1);
+            btn_row.append(&self.repeat_btn);
+            btn_row.append(&self.shuffle_btn);
+            btn_row.append(&self.screenshot_btn);
+            btn_row.append(&self.podcast_btn);
+            let sp2 = gtk::Box::builder().hexpand(true).build();
+            btn_row.append(&sp2);
+            btn_row.append(&self.tracks_btn);
+            btn_row.append(&self.speed_btn);
+            btn_row.append(&self.vol_btn);
+            btn_row.append(&self.vol_slider);
+            btn_row.append(&self.vol_label);
+
+            self.root.append(&seek_row);
+            self.root.append(&btn_row);
+        } else {
+            let time_row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .margin_start(12)
+                .margin_end(12)
+                .build();
+            let time_spacer = gtk::Box::builder().hexpand(true).build();
+            self.elapsed.set_valign(gtk::Align::Baseline);
+            self.remaining.set_valign(gtk::Align::Baseline);
+            time_row.append(&self.elapsed);
+            time_row.append(&time_spacer);
+            time_row.append(&self.remaining);
+
+            let left_box = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(4)
+                .halign(gtk::Align::Start)
+                .hexpand(true)
+                .build();
+            left_box.append(&self.repeat_btn);
+            left_box.append(&self.shuffle_btn);
+            left_box.append(&self.podcast_btn);
+            left_box.append(&self.screenshot_btn);
+
+            let center_btns = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(4)
+                .halign(gtk::Align::Center)
+                .hexpand(true)
+                .build();
+            center_btns.append(&self.prev_btn);
+            center_btns.append(&self.play_btn);
+            center_btns.append(&self.next_btn);
+
+            let vol_box = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(4)
+                .halign(gtk::Align::End)
+                .build();
+            vol_box.append(&self.tracks_btn);
+            vol_box.append(&self.speed_btn);
+            vol_box.append(&self.vol_btn);
+            vol_box.append(&self.vol_slider);
+            vol_box.append(&self.vol_label);
+
+            let end_row = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .margin_start(12)
+                .margin_end(12)
+                .margin_bottom(4)
+                .build();
+            end_row.append(&left_box);
+            end_row.append(&center_btns);
+            end_row.append(&vol_box);
+
+            self.root.append(&self.hover_label);
+            self.root.append(&self.seek_outer);
+            self.root.append(&time_row);
+            self.root.append(&end_row);
         }
     }
 
@@ -507,11 +572,11 @@ impl PlayerControls {
     }
 
     /// Called at ~200 ms — updates buttons and state-driven UI.
-    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, speed: f64, idle: bool, has_video: bool, repeat: RepeatMode, shuffle: bool, podcast_mode: bool) {
+    pub fn update(&self, pos: f64, dur: f64, paused: bool, muted: bool, volume: f64, speed: f64, idle: bool, has_video: bool, repeat: RepeatMode, shuffle: bool, podcast_mode: bool, has_prev: bool, has_next: bool) {
         let has_media = !idle;
         self.play_btn.set_sensitive(has_media);
-        self.prev_btn.set_sensitive(has_media);
-        self.next_btn.set_sensitive(has_media);
+        self.prev_btn.set_sensitive(has_prev);
+        self.next_btn.set_sensitive(has_next);
         self.seek_bar.set_sensitive(has_media);
         self.screenshot_btn.set_visible(has_media && has_video);
 
@@ -536,33 +601,40 @@ impl PlayerControls {
         } else {
             "audio-volume-high-symbolic"
         });
+        self.vol_label.set_label(&format!("{}%", volume as u32));
 
         // Repeat button: icon + opacity reflect current mode.
         match repeat {
             RepeatMode::None => {
                 self.repeat_btn.set_icon_name("media-playlist-repeat-symbolic");
-                self.repeat_btn.set_opacity(0.5);
+                self.repeat_btn.remove_css_class("toggle-active");
             }
             RepeatMode::Playlist => {
                 self.repeat_btn.set_icon_name("media-playlist-repeat-symbolic");
-                self.repeat_btn.set_opacity(1.0);
+                self.repeat_btn.add_css_class("toggle-active");
             }
             RepeatMode::One => {
                 self.repeat_btn.set_icon_name("media-playlist-repeat-song-symbolic");
-                self.repeat_btn.set_opacity(1.0);
+                self.repeat_btn.add_css_class("toggle-active");
             }
         }
         self.speed_btn.set_label(&format!("{}×", speed));
-        self.shuffle_btn.set_opacity(if shuffle { 1.0 } else { 0.5 });
+        if shuffle {
+            self.shuffle_btn.add_css_class("toggle-active");
+        } else {
+            self.shuffle_btn.remove_css_class("toggle-active");
+        }
 
-        // Screenshot: action button — consistent neutral opacity when visible.
-        self.screenshot_btn.set_opacity(0.6);
 
         // Podcast button: only relevant for video streams (saves bandwidth).
         // Show when there's video, or while podcast mode is on (video disabled but still a stream).
         let show_podcast = has_media && (has_video || podcast_mode);
         self.podcast_btn.set_visible(show_podcast);
-        self.podcast_btn.set_opacity(if podcast_mode { 1.0 } else { 0.5 });
+        if podcast_mode {
+            self.podcast_btn.add_css_class("toggle-active");
+        } else {
+            self.podcast_btn.remove_css_class("toggle-active");
+        }
     }
 
     pub fn update_tracks(&self, tracks: Vec<crate::player::TrackInfo>, state: &SharedState) {

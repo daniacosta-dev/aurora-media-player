@@ -23,6 +23,123 @@ fn mpv_command_array(ctx: *mut libmpv_sys::mpv_handle, args: &[&str]) -> Result<
     Ok(())
 }
 
+/// Snapshot of all commonly-polled mpv properties, populated from a background thread
+/// so the GTK main thread never blocks on mpv IPC calls.
+#[derive(Clone, Default)]
+pub struct MpvSnapshot {
+    pub idle:      bool,
+    pub pos:       f64,
+    pub dur:       f64,
+    pub paused:    bool,
+    pub muted:     bool,
+    pub volume:    f64,
+    pub speed:     f64,
+    pub title:     Option<String>,
+    pub has_video: bool,
+    pub artist:    Option<String>,
+    pub album:     Option<String>,
+    pub eof:       bool,
+    pub buffering: bool,
+    pub seeking:   bool,
+}
+
+impl MpvSnapshot {
+    /// Sensible non-zero defaults for "player just started, no media loaded".
+    pub fn idle_defaults() -> Self {
+        Self { idle: true, volume: 100.0, speed: 1.0, paused: true, ..Default::default() }
+    }
+}
+
+/// Wraps a raw `mpv_handle` pointer for background-thread property reads.
+/// SAFETY: libmpv's `mpv_get_property` is explicitly documented as thread-safe.
+pub struct MpvPoller(*mut libmpv_sys::mpv_handle);
+unsafe impl Send for MpvPoller {}
+
+impl MpvPoller {
+    fn get_f64(&self, prop: &str) -> f64 {
+        let Ok(name) = CString::new(prop) else { return 0.0 };
+        let mut val: f64 = 0.0;
+        let ret = unsafe {
+            libmpv_sys::mpv_get_property(
+                self.0, name.as_ptr(),
+                libmpv_sys::mpv_format_MPV_FORMAT_DOUBLE,
+                &mut val as *mut f64 as *mut _,
+            )
+        };
+        if ret == 0 { val } else { 0.0 }
+    }
+
+    fn get_bool(&self, prop: &str, default: bool) -> bool {
+        let Ok(name) = CString::new(prop) else { return default };
+        let mut val: i32 = 0;
+        let ret = unsafe {
+            libmpv_sys::mpv_get_property(
+                self.0, name.as_ptr(),
+                libmpv_sys::mpv_format_MPV_FORMAT_FLAG,
+                &mut val as *mut i32 as *mut _,
+            )
+        };
+        if ret == 0 { val != 0 } else { default }
+    }
+
+    fn get_i64(&self, prop: &str) -> Option<i64> {
+        let Ok(name) = CString::new(prop) else { return None };
+        let mut val: i64 = 0;
+        let ret = unsafe {
+            libmpv_sys::mpv_get_property(
+                self.0, name.as_ptr(),
+                libmpv_sys::mpv_format_MPV_FORMAT_INT64,
+                &mut val as *mut i64 as *mut _,
+            )
+        };
+        if ret == 0 { Some(val) } else { None }
+    }
+
+    fn get_str(&self, prop: &str) -> Option<String> {
+        let Ok(name) = CString::new(prop) else { return None };
+        let mut val: *mut libc::c_char = std::ptr::null_mut();
+        let ret = unsafe {
+            libmpv_sys::mpv_get_property(
+                self.0, name.as_ptr(),
+                libmpv_sys::mpv_format_MPV_FORMAT_STRING,
+                &mut val as *mut *mut libc::c_char as *mut _,
+            )
+        };
+        if ret == 0 && !val.is_null() {
+            let s = unsafe { std::ffi::CStr::from_ptr(val).to_string_lossy().into_owned() };
+            unsafe { libmpv_sys::mpv_free(val as *mut _) };
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    /// Read all polled properties in one go. May block if mpv holds its internal lock.
+    /// Called from the background thread only.
+    pub fn read_snapshot(&self) -> MpvSnapshot {
+        let volume = self.get_f64("volume");
+        let speed   = self.get_f64("speed");
+        MpvSnapshot {
+            idle:      self.get_bool("idle-active", true),
+            pos:       self.get_f64("time-pos"),
+            dur:       self.get_f64("duration"),
+            paused:    self.get_bool("pause", true),
+            muted:     self.get_bool("mute", false),
+            volume:    if volume == 0.0 { 100.0 } else { volume },
+            speed:     if speed  == 0.0 { 1.0   } else { speed  },
+            title:     self.get_str("media-title"),
+            has_video: self.get_i64("width").map(|w| w > 0).unwrap_or(false),
+            artist:    self.get_str("metadata/by-key/Artist")
+                           .or_else(|| self.get_str("metadata/by-key/artist")),
+            album:     self.get_str("metadata/by-key/Album")
+                           .or_else(|| self.get_str("metadata/by-key/album")),
+            eof:       self.get_bool("eof-reached", false),
+            buffering: self.get_i64("paused-for-cache").map(|v| v != 0).unwrap_or(false),
+            seeking:   self.get_i64("seeking").map(|v| v != 0).unwrap_or(false),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TrackInfo {
     pub id: i64,
@@ -88,6 +205,11 @@ impl MpvPlayer {
         }
 
         Ok(Self { mpv })
+    }
+
+    /// Create a `MpvPoller` that can be moved to a background thread for non-blocking reads.
+    pub fn make_poller(&self) -> MpvPoller {
+        MpvPoller(self.mpv.ctx.as_ptr())
     }
 
     /// Create an OpenGL render context for this player.
