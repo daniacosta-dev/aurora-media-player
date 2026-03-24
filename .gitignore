@@ -2,3 +2,4 @@ target/
 *.gresource
 Cargo.lock
 .env
+*.snap

@@ -302,6 +302,17 @@ impl MediaHeaderBar {
             let cb = on_ui_mode_change.clone();
             move |btn| {
                 let Some(parent) = btn.root().and_downcast::<gtk::Window>() else { return };
+                // Toggle: if settings is already open, close it.
+                for w in gtk::Window::list_toplevels() {
+                    if let Some(win) = w.downcast_ref::<gtk::Window>() {
+                        if win.title().as_deref() == Some("Settings")
+                            && win.transient_for().as_ref() == Some(&parent)
+                        {
+                            win.close();
+                            return;
+                        }
+                    }
+                }
                 show_settings_dialog(&parent, cb.clone());
             }
         });
@@ -609,6 +620,7 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .modal(true)
         .default_width(520)
         .default_height(520)
+        .resizable(false)
         .build();
 
     let header = adw::HeaderBar::new();

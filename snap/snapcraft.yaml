@@ -5,19 +5,24 @@ summary: Modern media player for GNOME
 description: |
   Aurora Media Player is a modern, Haruna-inspired media player for GNOME.
   Built with GTK4, libadwaita, and mpv for high-quality playback.
-  Supports video and audio in all common formats.
+  Supports video and audio in all common formats, YouTube, Twitch,
+  IPTV/M3U playlists, subtitles, chapters, and MPRIS media-key integration.
 
-grade: devel
+grade: stable
 confinement: strict
+icon: data/icons/hicolor/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg
 
-# The gnome extension wires up GTK4, libadwaita, Wayland/X11, theming,
-# and common GNOME portal interfaces.  It also sets SNAP_DESKTOP_RUNTIME
-# and adjusts LD_LIBRARY_PATH so the runtime libraries from the platform
-# snap are found at runtime — no manual rpath hacks needed.
+slots:
+  # Allow MPRIS media-player integration (media keys, taskbar, lock screen).
+  aurora-mpris:
+    interface: mpris
+
 apps:
   aurora-media-player:
     command: bin/aurora-media
     extensions: [gnome]
+    slots:
+      - aurora-mpris
     plugs:
       - audio-playback   # PipeWire / PulseAudio
       - home             # ~/Videos, ~/Music, ~/Downloads
@@ -30,15 +35,22 @@ apps:
       LIBVA_DRIVER_NAME: ""
       # Make the bundled yt-dlp binary visible to mpv's ytdl_hook script.
       PATH: $SNAP/usr/bin:$PATH
+      # libblas3/liblapack3 install into blas/ and lapack/ subdirectories
+      # which are not on the default linker search path inside the snap.
+      # gnome-platform is prepended before $LD_LIBRARY_PATH (which includes
+      # gpu-2404) so its libharfbuzz takes priority over any older copy the
+      # GPU content snap may bundle.
+      LD_LIBRARY_PATH: $SNAP/gnome-platform/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/blas:$SNAP/usr/lib/x86_64-linux-gnu/lapack:$LD_LIBRARY_PATH
 
 parts:
   aurora-media:
     plugin: rust
     source: .
-    # build-environment inherits CARGO_HOME etc. from the rust plugin.
+    rust-channel: stable
     build-packages:
       - libmpv-dev
       - libepoxy-dev
+      - librsvg2-bin    # rsvg-convert for PNG icon generation
       - pkg-config
     stage-packages:
       # mpv runtime library — not provided by the GNOME platform snap.
@@ -49,17 +61,31 @@ parts:
       - libva-x11-2
       # Mesa — needed for software GL fallback and vaapi on open drivers.
       - libgl1-mesa-dri
+      # BLAS/LAPACK — pulled in by mpv audio processing.
+      - libblas3
+      - liblapack3
+    # Exclude libraries already provided by the GNOME platform snap to avoid
+    # version conflicts (libharfbuzz pulled in by libmpv2 dependencies).
+    prime:
+      - -usr/lib/x86_64-linux-gnu/libharfbuzz*
+      - -usr/lib/x86_64-linux-gnu/libfreetype*
+      - -usr/lib/x86_64-linux-gnu/libfontconfig*
     override-build: |
       craftctl default
-      # Ensure the binary lands in $CRAFT_PART_INSTALL/bin/
+      # Binary
       install -Dm755 target/release/aurora-media \
         "$CRAFT_PART_INSTALL/bin/aurora-media"
       # AppStream metainfo
       install -Dm644 data/io.github.daniacosta_dev.AuroraMediaPlayer.metainfo.xml \
         "$CRAFT_PART_INSTALL/share/metainfo/io.github.daniacosta_dev.AuroraMediaPlayer.metainfo.xml"
-      # App icon
+      # SVG icon (for icon-theme lookup)
       install -Dm644 data/icons/hicolor/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg \
         "$CRAFT_PART_INSTALL/share/icons/hicolor/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg"
+      # PNG icon at meta/gui/icon.png — standard snap launcher icon
+      mkdir -p "$CRAFT_PART_INSTALL/meta/gui"
+      rsvg-convert -w 128 -h 128 \
+        data/icons/hicolor/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg \
+        -o "$CRAFT_PART_INSTALL/meta/gui/icon.png"
 
   yt-dlp:
     plugin: nil

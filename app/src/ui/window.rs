@@ -200,18 +200,52 @@ fn load_playlist(
     load_playlist_items(items, state, playlist_ui, play_first);
 }
 
-/// Resolve a drop target to a list of (title, path) pairs.
-/// Handles files, folders, and M3U playlists.
+/// Resolve a dropped file or folder into (title, path) pairs.
+/// Does NOT handle M3U — those are handled separately.
 fn resolve_drop(path: &Path) -> Vec<(String, PathBuf)> {
     if path.is_dir() {
         scan_directory(path)
             .into_iter()
             .map(|item| (title_for_path(&item.path), item.path))
             .collect()
-    } else if is_m3u(path) {
-        parse_m3u(path)
     } else {
         vec![(title_for_path(path), path.to_path_buf())]
+    }
+}
+
+/// Append items to the existing queue without replacing it.
+/// Starts playback automatically only when the queue was empty before.
+fn append_to_playlist(
+    items: Vec<(String, PathBuf)>,
+    state: &SharedState,
+    playlist_ui: &PlaylistPanel,
+) {
+    let playlist_was_empty = state.borrow().playlist.is_empty();
+    let start_idx = state.borrow().playlist.len();
+
+    {
+        let mut s = state.borrow_mut();
+        for (_, path) in &items {
+            s.playlist.push(path.clone());
+        }
+        if s.current_idx.is_none() && !items.is_empty() {
+            s.current_idx = Some(start_idx);
+        }
+    }
+
+    for (title, path) in &items {
+        playlist_ui.add_item(title, path);
+    }
+
+    // Auto-play only when nothing was queued before the drop.
+    if playlist_was_empty {
+        if let Some((_, path)) = items.first().cloned() {
+            state.borrow_mut().pending_seek = None;
+            playlist_ui.select_row(start_idx);
+            if let Some(p) = state.borrow().player.as_ref() {
+                p.execute(PlayerCommand::Open(path)).ok();
+            }
+        }
     }
 }
 
@@ -445,6 +479,7 @@ impl MediaWindow {
             .sync_create()
             .build();
 
+
         // ── Sync maximize button ↔ fullscreen ────────────────────────────
         // When the user clicks the title-bar restore button while fullscreen,
         // detect the unmaximize and also exit fullscreen.
@@ -474,9 +509,18 @@ impl MediaWindow {
             drop_target.connect_drop(move |_, value, _, _| {
                 if let Ok(file) = value.get::<gio::File>() {
                     if let Some(path) = file.path() {
-                        let items = resolve_drop(&path);
-                        if !items.is_empty() {
-                            load_playlist_items(items, &state_c, &playlist_c, true);
+                        if is_m3u(&path) {
+                            // M3U: load as a fresh playlist (replaces queue)
+                            let items = parse_m3u(&path);
+                            if !items.is_empty() {
+                                load_playlist_items(items, &state_c, &playlist_c, true);
+                            }
+                        } else {
+                            // Local file / folder: append to the existing queue
+                            let items = resolve_drop(&path);
+                            if !items.is_empty() {
+                                append_to_playlist(items, &state_c, &playlist_c);
+                            }
                         }
                     }
                 }

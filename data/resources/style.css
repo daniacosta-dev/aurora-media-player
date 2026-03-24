@@ -31,7 +31,7 @@ button.file-menu-item image {
 .controls-bar {
     padding: 2px 8px 6px;
     margin: 0 16px 12px;
-    background-color: alpha(@sidebar_bg_color, 0.92);
+    background-color: @sidebar_bg_color;
     border-radius: 16px;
     border: 1px solid alpha(@window_fg_color, 0.08);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.30);
@@ -46,6 +46,15 @@ button.file-menu-item image {
     border: none;
     border-top: 1px solid alpha(@window_fg_color, 0.09);
     padding: 4px 0 4px;
+    background-color: @headerbar_bg_color;
+}
+
+/* ── Headerbar — unify with sidebar/controls chrome ─────────────────────────── */
+/* In dark mode @headerbar_bg_color differs from @sidebar_bg_color, causing a
+   mismatch with the controls bar and playlist panel.  Override the headerbar
+   to use the same colour so the whole chrome feels unified (mirrors light mode
+   behaviour where both resolve to the same near-white). */
+headerbar {
     background-color: @sidebar_bg_color;
 }
 
