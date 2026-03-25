@@ -1185,10 +1185,11 @@ impl MediaWindow {
                 win.set_title(Some("Aurora Media Player"));
 
                 let idle_secs = last_motion.get().elapsed().as_secs_f64();
-                let hide_after = if mouse_over_controls_c.get() { 5.0 } else { 2.0 };
+                let popover_open = controls_c.has_open_popover();
+                let hide_after = if mouse_over_controls_c.get() || popover_open { 5.0 } else { 2.0 };
 
                 if win.property::<bool>("fullscreened") {
-                    if idle_secs > hide_after {
+                    if idle_secs > hide_after && !popover_open {
                         if let Some(tv) = toolbar_view_weak.upgrade() {
                             tv.set_reveal_top_bars(false);
                         }
@@ -1211,7 +1212,7 @@ impl MediaWindow {
                         tv.set_reveal_top_bars(true);
                     }
                     if !is_fixed_mode_c.get() {
-                        if idle_secs > hide_after && !idle {
+                        if idle_secs > hide_after && !idle && !popover_open {
                             if let Some(r) = controls_revealer_weak.upgrade() {
                                 r.set_reveal_child(false);
                             }

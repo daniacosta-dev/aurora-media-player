@@ -29,6 +29,7 @@ pub struct PlayerControls {
     tracks_btn: Button,
     podcast_btn: Button,
     tracks_popover: Popover,
+    speed_popover: Popover,
     last_tracks: Rc<RefCell<Vec<crate::player::TrackInfo>>>,
     chapter_overlay: DrawingArea,
     chapter_data: Rc<RefCell<(f64, Vec<(String, f64)>)>>,
@@ -433,6 +434,7 @@ impl PlayerControls {
             tracks_btn,
             podcast_btn,
             tracks_popover,
+            speed_popover,
             last_tracks: Rc::new(RefCell::new(Vec::new())),
             chapter_overlay,
             chapter_data: chapter_data.clone(),
@@ -554,6 +556,13 @@ impl PlayerControls {
 
     pub fn widget(&self) -> &Box {
         &self.root
+    }
+
+    /// Returns true if any popover (speed, tracks) is currently open.
+    /// Used by the auto-hide timer to prevent hiding the control bar while
+    /// the user is navigating a dropdown.
+    pub fn has_open_popover(&self) -> bool {
+        self.speed_popover.is_visible() || self.tracks_popover.is_visible()
     }
 
     /// Called at ~50 ms — only updates the seek bar and time labels.
