@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aurora Media Player — Modern media player for GNOME</title>
+  <meta name="description" content="A modern, clean media player for Linux built with GTK4, libadwaita and Rust. Powered by mpv." />
+  <style>
+    :root {
+      --accent: #e07040;
+      --accent-hover: #c85e30;
+      --bg: #0f0f0f;
+      --bg2: #1a1a1a;
+      --bg3: #242424;
+      --text: #f0f0f0;
+      --text-muted: #999;
+      --radius: 12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, "Segoe UI", Cantarell, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hover); }
+
+    /* ── NAV ── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 2rem;
+      position: sticky;
+      top: 0;
+      background: rgba(15,15,15,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid #2a2a2a;
+      z-index: 100;
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-weight: 600;
+      font-size: 1rem;
+      color: var(--text);
+    }
+
+    .nav-logo img { width: 28px; height: 28px; }
+
+    nav ul {
+      list-style: none;
+      display: flex;
+      gap: 1.5rem;
+    }
+
+    nav ul a {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      transition: color 0.2s;
+    }
+
+    nav ul a:hover { color: var(--text); }
+
+    /* ── HERO ── */
+    .hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 5rem 2rem 3rem;
+      gap: 1.5rem;
+    }
+
+    .hero-icon {
+      width: 96px;
+      height: 96px;
+      filter: drop-shadow(0 8px 24px rgba(224,112,64,0.3));
+    }
+
+    .hero h1 {
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    .hero h1 span { color: var(--accent); }
+
+    .hero p {
+      font-size: 1.15rem;
+      color: var(--text-muted);
+      max-width: 520px;
+    }
+
+    .badges {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .badge {
+      font-size: 0.75rem;
+      padding: 0.25rem 0.7rem;
+      border-radius: 999px;
+      background: var(--bg3);
+      color: var(--text-muted);
+      border: 1px solid #333;
+    }
+
+    .install-buttons {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-top: 0.5rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1.4rem;
+      border-radius: var(--radius);
+      font-size: 0.95rem;
+      font-weight: 500;
+      transition: all 0.2s;
+      cursor: pointer;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    .btn-secondary {
+      background: var(--bg3);
+      color: var(--text);
+      border: 1px solid #333;
+    }
+
+    .btn-secondary:hover {
+      background: #2e2e2e;
+      color: var(--text);
+      transform: translateY(-1px);
+    }
+
+    .btn-disabled {
+      background: var(--bg3);
+      color: var(--text-muted);
+      border: 1px solid #2a2a2a;
+      cursor: default;
+      opacity: 0.6;
+    }
+
+    /* ── SCREENSHOTS ── */
+    .screenshots {
+      padding: 2rem 1rem 4rem;
+    }
+
+    .screenshots-track {
+      display: flex;
+      gap: 1.2rem;
+      overflow-x: auto;
+      scroll-snap-type: x mandatory;
+      padding: 1rem 2rem 1.5rem;
+      scrollbar-width: thin;
+      scrollbar-color: #333 transparent;
+      cursor: grab;
+      user-select: none;
+    }
+
+    .screenshots-track.dragging {
+      cursor: grabbing;
+      scroll-snap-type: none;
+    }
+
+    .screenshots-track img {
+      scroll-snap-align: start;
+      flex-shrink: 0;
+      width: min(880px, 85vw);
+      border-radius: var(--radius);
+      border: 1px solid #2a2a2a;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+      transition: transform 0.2s;
+      pointer-events: none;
+      -webkit-user-drag: none;
+      draggable: false;
+    }
+
+    /* ── SECTION TITLES ── */
+    .section-title {
+      text-align: center;
+      font-size: 1.6rem;
+      font-weight: 600;
+      margin-bottom: 2.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    /* ── FEATURES ── */
+    .features {
+      padding: 4rem 2rem;
+      background: var(--bg2);
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1.2rem;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    .feature-card {
+      background: var(--bg3);
+      border: 1px solid #2e2e2e;
+      border-radius: var(--radius);
+      padding: 1.4rem 1.6rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .feature-icon {
+      font-size: 1.5rem;
+      margin-bottom: 0.2rem;
+    }
+
+    .feature-card h3 {
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .feature-card p {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+
+    /* ── INSTALL ── */
+    .install {
+      padding: 4rem 2rem;
+      text-align: center;
+    }
+
+    .install-cards {
+      display: flex;
+      gap: 1.2rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 2rem;
+    }
+
+    .install-card {
+      background: var(--bg2);
+      border: 1px solid #2e2e2e;
+      border-radius: var(--radius);
+      padding: 2rem;
+      width: 280px;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      align-items: center;
+      text-align: center;
+    }
+
+    .install-card.wide {
+      width: 360px;
+    }
+
+    .install-card h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+
+    .install-card p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .code-block {
+      background: var(--bg3);
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 0.82rem;
+      color: #ccc;
+      width: 100%;
+      text-align: left;
+      word-break: break-all;
+      overflow-wrap: break-word;
+      white-space: pre-wrap;
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid #2a2a2a;
+      padding: 2rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .footer-links a {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    .footer-links a:hover { color: var(--text); }
+
+    @media (max-width: 600px) {
+      nav ul { display: none; }
+      .hero { padding: 3rem 1.5rem 2rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a class="nav-logo" href="#">
+    <img src="icon.svg" alt="Aurora icon" />
+    Aurora
+  </a>
+  <ul>
+    <li><a href="#features">Features</a></li>
+    <li><a href="#screenshots">Screenshots</a></li>
+    <li><a href="#install">Install</a></li>
+    <li><a href="https://github.com/daniacosta-dev/aurora-media-player">GitHub</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <img class="hero-icon" src="icon.svg" alt="Aurora Media Player icon" />
+  <h1>Aurora <span>Media Player</span></h1>
+  <p>A modern, clean media player for Linux — built with GTK4, libadwaita, and Rust. Powered by mpv.</p>
+  <div class="badges">
+    <span class="badge">GTK4 + libadwaita</span>
+    <span class="badge">Built with Rust</span>
+    <span class="badge">Wayland native</span>
+    <span class="badge">GPL-3.0</span>
+  </div>
+  <div class="install-buttons">
+    <a class="btn btn-primary" href="https://snapcraft.io/aurora-media-player">
+      Install from Snap Store
+    </a>
+    <a class="btn btn-secondary" href="https://github.com/daniacosta-dev/aurora-media-player">
+      View on GitHub
+    </a>
+    <span class="btn btn-disabled">Flathub — coming soon</span>
+  </div>
+</section>
+
+<!-- SCREENSHOTS -->
+<section class="screenshots" id="screenshots">
+  <div class="screenshots-track">
+    <img src="screenshots/screenshot-2.png" alt="Aurora Media Player light theme" />
+    <img src="screenshots/screenshot-3.png" alt="Aurora Media Player light theme fullscreen" />
+    <img src="screenshots/screenshot-4.png" alt="Aurora Media Player settings" />
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="features" id="features">
+  <h2 class="section-title">Everything you need</h2>
+  <div class="features-grid">
+
+    <div class="feature-card">
+      <div class="feature-icon">🎬</div>
+      <h3>All formats</h3>
+      <p>Plays MP4, MKV, AVI, WebM, MP3, FLAC, OGG and more — powered by mpv and ffmpeg.</p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🌐</div>
+      <h3>URL Playback</h3>
+      <p>Paste any YouTube, Twitch or direct media URL. yt-dlp is bundled — no extra setup needed.</p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">⚡</div>
+      <h3>Hardware acceleration</h3>
+      <p>VA-API support for Intel and AMD GPUs. Smooth 4K playback without maxing out your CPU.</p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">📋</div>
+      <h3>Smart playlists</h3>
+      <p>Drag-and-drop file playlists, URL playlists you can save and reload by name, and repeat modes.</p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🎵</div>
+      <h3>Podcast & audio mode</h3>
+      <p>Clean audio-only view with artist, album, and track info from file metadata.</p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🌙</div>
+      <h3>Light, Dark & System theme</h3>
+      <p>Follows your GNOME theme automatically, or set it manually. Persisted across sessions.</p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">⌨️</div>
+      <h3>Keyboard shortcuts</h3>
+      <p>Full keyboard control — play/pause, seek, volume, next/previous track and more.</p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">🔑</div>
+      <h3>MPRIS support</h3>
+      <p>Media keys, taskbar integration and lock screen controls work out of the box.</p>
+    </div>
+
+    <div class="feature-card">
+      <div class="feature-icon">💾</div>
+      <h3>Session restore</h3>
+      <p>Remembers the last file you played and resumes from where you left off.</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- INSTALL -->
+<section class="install" id="install">
+  <h2 class="section-title">Get Aurora</h2>
+  <div class="install-cards">
+
+    <div class="install-card">
+      <h3>Snap</h3>
+      <p>Available now. Strict confinement, Wayland native, yt-dlp bundled.</p>
+      <div class="code-block">sudo snap install aurora-media-player</div>
+      <a class="btn btn-primary" href="https://snapcraft.io/aurora-media-player">Snap Store</a>
+    </div>
+
+    <div class="install-card wide">
+      <h3>Flatpak</h3>
+      <p>Coming soon to Flathub.</p>
+      <div class="code-block">flatpak install flathub io.github.daniacosta_dev.AuroraMediaPlayer</div>
+      <span class="btn btn-disabled">Coming soon</span>
+    </div>
+
+    <div class="install-card">
+      <h3>Build from source</h3>
+      <p>Requires Rust, GTK4, libadwaita and libmpv.</p>
+      <div class="code-block">cargo build --release</div>
+      <a class="btn btn-secondary" href="https://github.com/daniacosta-dev/aurora-media-player#build-from-source">Instructions</a>
+    </div>
+
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-links">
+    <a href="https://github.com/daniacosta-dev/aurora-media-player">GitHub</a>
+    <a href="https://github.com/daniacosta-dev/aurora-media-player/issues">Report a bug</a>
+    <a href="https://snapcraft.io/aurora-media-player">Snap Store</a>
+    <a href="https://ko-fi.com/daniacostadev">Support on Ko-fi</a>
+  </div>
+  <p>Made with Rust by Daniel Acosta &nbsp;·&nbsp; GPL-3.0 License</p>
+</footer>
+
+<script>
+
+  const track = document.querySelector('.screenshots-track');
+  let isDragging = false;
+  let startX, scrollStart, moved;
+
+  track.addEventListener('mousedown', e => {
+    isDragging = true;
+    moved = false;
+    startX = e.pageX;
+    scrollStart = track.scrollLeft;
+    track.classList.add('dragging');
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    const dx = e.pageX - startX;
+    if (Math.abs(dx) > 3) moved = true;
+    track.scrollLeft = scrollStart - dx;
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!isDragging) return;
+    isDragging = false;
+    track.classList.remove('dragging');
+  });
+</script>
+</body>
+</html>
