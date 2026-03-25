@@ -41,6 +41,9 @@ pub struct MpvSnapshot {
     pub eof:       bool,
     pub buffering: bool,
     pub seeking:   bool,
+    pub thumbnail: Option<String>,
+    pub path:      Option<String>, // current URL/path being played
+    pub uploader:  Option<String>, // yt-dlp uploader / channel name
 }
 
 impl MpvSnapshot {
@@ -136,6 +139,15 @@ impl MpvPoller {
             eof:       self.get_bool("eof-reached", false),
             buffering: self.get_i64("paused-for-cache").map(|v| v != 0).unwrap_or(false),
             seeking:   self.get_i64("seeking").map(|v| v != 0).unwrap_or(false),
+            thumbnail: self.get_str("metadata/by-key/thumbnail")
+                           .or_else(|| self.get_str("metadata/by-key/Thumbnail")),
+            path:      self.get_str("path"),
+            uploader:  self.get_str("metadata/by-key/uploader")
+                           .or_else(|| self.get_str("metadata/by-key/Uploader"))
+                           .or_else(|| self.get_str("metadata/by-key/channel"))
+                           .or_else(|| self.get_str("metadata/by-key/Channel"))
+                           .or_else(|| self.get_str("metadata/by-key/album_artist"))
+                           .or_else(|| self.get_str("metadata/by-key/Album_Artist")),
         }
     }
 }

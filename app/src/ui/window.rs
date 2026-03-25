@@ -927,19 +927,35 @@ impl MediaWindow {
         // Debounce volume/mute disk writes: only flush after N ticks of no further changes.
         let settings_save_cooldown = Rc::new(Cell::new(0u32));
         let snapshot_200 = snapshot.clone();
+        let fallback_icon_uri = aurora_icon_uri();
 
         glib::timeout_add_local(Duration::from_millis(200), move || {
             let _tick_start = std::time::Instant::now();
             // Read mpv properties from the background-thread snapshot — no blocking IPC.
             let (pos, dur, paused, muted, volume, speed, title, idle, has_video,
-                 artist, album, eof, buffering, seeking) = {
+                 artist, album, thumbnail, eof, buffering, seeking) = {
                 let snap = match snapshot_200.lock() {
                     Ok(g) => g.clone(),
                     Err(_) => return glib::ControlFlow::Continue,
                 };
+                // For online streams (YouTube etc.), artist may come from uploader/channel.
+                let artist = snap.artist
+                    .or(snap.uploader)
+                    .unwrap_or_default();
+                // For YouTube, derive the thumbnail URL from the video ID when no
+                // embedded thumbnail is available.
+                let thumbnail = snap.thumbnail.unwrap_or_default();
+                let thumbnail = if thumbnail.is_empty() {
+                    snap.path.as_deref()
+                        .and_then(youtube_thumbnail_url)
+                        .unwrap_or_default()
+                } else {
+                    thumbnail
+                };
                 (snap.pos, snap.dur, snap.paused, snap.muted, snap.volume, snap.speed,
                  snap.title, snap.idle, snap.has_video,
-                 snap.artist.unwrap_or_default(), snap.album.unwrap_or_default(),
+                 artist, snap.album.unwrap_or_default(),
+                 thumbnail,
                  snap.eof, snap.buffering, snap.seeking)
             };
             // Read Rust-side state (no mpv IPC — always fast).
@@ -1342,6 +1358,7 @@ impl MediaWindow {
                     title: title.as_deref().unwrap_or("").into(),
                     artist: artist.clone(),
                     album: album.clone(),
+                    art_url: if thumbnail.is_empty() { fallback_icon_uri.clone() } else { thumbnail.clone() },
                     position_us: (pos * 1_000_000.0) as i64,
                     duration_us: (dur * 1_000_000.0) as i64,
                     volume: volume / 100.0,
@@ -1393,4 +1410,79 @@ impl MediaWindow {
             p.execute(PlayerCommand::Open(path.to_path_buf())).ok();
         }
     }
+}
+
+/// Extracts a YouTube thumbnail `https://` URL from a YouTube video URL.
+/// Supports `youtube.com/watch?v=ID`, `youtu.be/ID`, and `youtube.com/shorts/ID`.
+/// Returns `None` for non-YouTube URLs.
+fn youtube_thumbnail_url(url: &str) -> Option<String> {
+    let extract_id = |start: &str| -> Option<String> {
+        let id: String = start
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        if id.is_empty() { None } else { Some(id) }
+    };
+
+    // youtube.com/watch?v=ID or youtube.com/watch?…&v=ID
+    if url.contains("youtube.com/watch") {
+        if let Some(pos) = url.find("v=") {
+            if let Some(id) = extract_id(&url[pos + 2..]) {
+                return Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", id));
+            }
+        }
+    }
+    // youtu.be/ID
+    if let Some(pos) = url.find("youtu.be/") {
+        if let Some(id) = extract_id(&url[pos + 9..]) {
+            return Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", id));
+        }
+    }
+    // youtube.com/shorts/ID
+    if let Some(pos) = url.find("youtube.com/shorts/") {
+        if let Some(id) = extract_id(&url[pos + 19..]) {
+            return Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", id));
+        }
+    }
+
+    None
+}
+
+/// Returns a `file://` URI for Aurora's own icon, used as MPRIS artUrl fallback
+/// when no media-specific thumbnail is available. Prefers PNG over SVG because
+/// some MPRIS clients (e.g. GNOME Shell media controls) don't render SVG artUrls.
+fn aurora_icon_uri() -> String {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    if let Ok(snap) = std::env::var("SNAP") {
+        let snap = std::path::PathBuf::from(snap);
+        // PNG from snap build (128×128, guaranteed to render in any MPRIS client)
+        candidates.push(snap.join("meta/gui/icon.png"));
+        // SVG fallback within snap
+        candidates.push(snap.join("share/icons/hicolor/scalable/apps")
+            .join("io.github.daniacosta_dev.AuroraMediaPlayer.svg"));
+    }
+
+    // XDG_DATA_HOME (~/.local/share) — dev mode copies icon here at startup
+    if let Some(data_home) = dirs::data_dir() {
+        candidates.push(data_home.join("icons/hicolor/scalable/apps")
+            .join("io.github.daniacosta_dev.AuroraMediaPlayer.svg"));
+    }
+
+    // XDG_DATA_DIRS (system install, Flatpak, etc.)
+    let xdg_dirs = std::env::var("XDG_DATA_DIRS")
+        .unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
+    for dir in xdg_dirs.split(':') {
+        candidates.push(std::path::PathBuf::from(dir)
+            .join("icons/hicolor/scalable/apps")
+            .join("io.github.daniacosta_dev.AuroraMediaPlayer.svg"));
+    }
+
+    for p in candidates {
+        if p.exists() {
+            return format!("file://{}", p.display());
+        }
+    }
+
+    String::new()
 }

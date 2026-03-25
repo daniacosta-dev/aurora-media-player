@@ -2,5 +2,7 @@
 <gresources>
   <gresource prefix="/io/github/daniacosta_dev/AuroraMediaPlayer">
     <file alias="style.css">style.css</file>
+    <!-- Bundled app icon — registered with the GTK icon theme via add_resource_path() in app.rs -->
+    <file>icons/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg</file>
   </gresource>
 </gresources>

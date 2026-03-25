@@ -13,6 +13,7 @@ pub struct MprisState {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub art_url: String, // https:// or file:// URI for cover art
     pub position_us: i64, // microseconds
     pub duration_us: i64, // microseconds
     pub volume: f64,      // 0.0 – 1.0
@@ -141,6 +142,7 @@ async fn run_server(
         if current.title != prev.title
             || current.artist != prev.artist
             || current.album != prev.album
+            || current.art_url != prev.art_url
             || current.duration_us != prev.duration_us
         {
             iface.get().await.metadata_changed(iface.signal_context()).await.ok();
@@ -180,7 +182,15 @@ impl MediaPlayer2 {
     #[zbus(property)]
     async fn identity(&self) -> &str { "Aurora Media Player" }
     #[zbus(property)]
-    async fn desktop_entry(&self) -> &str { "io.github.daniacosta_dev.AuroraMediaPlayer" }
+    async fn desktop_entry(&self) -> String {
+        // Snaps install the .desktop file as "<snap-instance-name>_<desktop-file-name>".
+        // MPRIS clients use this value to look up the app icon, so it must match exactly.
+        if let Ok(snap_name) = std::env::var("SNAP_INSTANCE_NAME") {
+            format!("{}_aurora-media-player", snap_name)
+        } else {
+            "io.github.daniacosta_dev.AuroraMediaPlayer".into()
+        }
+    }
     #[zbus(property)]
     async fn supported_uri_schemes(&self) -> Vec<String> { vec!["file".into()] }
     #[zbus(property)]
@@ -234,7 +244,7 @@ impl MediaPlayer2Player {
     #[zbus(property)]
     async fn metadata(&self) -> HashMap<String, OwnedValue> {
         let s = self.state.lock().unwrap();
-        build_metadata(&s.title, &s.artist, &s.album, s.duration_us)
+        build_metadata(&s.title, &s.artist, &s.album, &s.art_url, s.duration_us)
     }
 
     #[zbus(property)]
@@ -273,6 +283,7 @@ fn build_metadata(
     title: &str,
     artist: &str,
     album: &str,
+    art_url: &str,
     duration_us: i64,
 ) -> HashMap<String, OwnedValue> {
     let mut map: HashMap<String, OwnedValue> = HashMap::new();
@@ -305,6 +316,13 @@ fn build_metadata(
         map.insert(
             "xesam:album".into(),
             Value::from(album).try_into().unwrap(),
+        );
+    }
+
+    if !art_url.is_empty() {
+        map.insert(
+            "mpris:artUrl".into(),
+            Value::from(art_url).try_into().unwrap(),
         );
     }
 

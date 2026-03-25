@@ -81,6 +81,12 @@ impl AuroraMediaApp {
 
         app.connect_startup(|_| {
             adw::init().expect("Failed to initialize libadwaita");
+            // Register the bundled icon so GTK finds it via set_default_icon_name,
+            // regardless of whether the app is installed on the system.
+            if let Some(display) = Display::default() {
+                gtk::IconTheme::for_display(&display)
+                    .add_resource_path("/io/github/daniacosta_dev/AuroraMediaPlayer/icons");
+            }
             gtk::Window::set_default_icon_name(APP_ID);
             load_css();
             // Apply saved language before any widget is built.
