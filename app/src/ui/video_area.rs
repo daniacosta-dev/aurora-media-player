@@ -8,6 +8,7 @@ use gtk4::prelude::*;
 use glib;
 use libc;
 
+use crate::i18n::t;
 use crate::state::SharedState;
 
 const GL_DRAW_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
@@ -53,7 +54,7 @@ impl VideoArea {
             .build();
 
         let idle_label = Label::builder()
-            .label("Open a file to start playing")
+            .label(t("Open a file to start playing"))
             .css_classes(vec!["dim-label"])
             .build();
 
@@ -320,6 +321,10 @@ impl VideoArea {
 
     pub fn widget(&self) -> &Overlay {
         &self.root
+    }
+
+    pub fn relabel(&self) {
+        self.idle_label.set_label(t("Open a file to start playing"));
     }
 
     /// Switch to the video/idle page.

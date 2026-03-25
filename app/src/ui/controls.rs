@@ -5,6 +5,7 @@ use gtk4::{self as gtk, Box, Orientation, Button, Scale, Label, Adjustment, Popo
 use gtk4::prelude::*;
 use glib;
 
+use crate::i18n::t;
 use crate::state::SharedState;
 use crate::player::PlayerCommand;
 use crate::player::RepeatMode;
@@ -168,7 +169,7 @@ impl PlayerControls {
         let shuffle_btn = Button::builder()
             .icon_name("media-playlist-shuffle-symbolic")
             .css_classes(vec!["flat", "shuffle-btn"])
-            .tooltip_text("Shuffle")
+            .tooltip_text(t("Shuffle"))
             .build();
         
         // ── Volume ────────────────────────────────────────────────────────
@@ -192,21 +193,21 @@ impl PlayerControls {
         // ── Podcast mode button ───────────────────────────────────────────
         let podcast_btn = Button::builder()
             .icon_name("audio-headphones-symbolic")
-            .tooltip_text("Podcast mode — audio only (saves bandwidth)")
+            .tooltip_text(t("Podcast mode — audio only (saves bandwidth)"))
             .css_classes(vec!["flat"])
             .build();
-        
+
         // ── Screenshot button ─────────────────────────────────────────────
         let screenshot_btn = Button::builder()
             .icon_name("camera-photo-symbolic")
-            .tooltip_text("Take screenshot")
+            .tooltip_text(t("Take screenshot"))
             .css_classes(vec!["flat"])
             .build();
 
         // ── Tracks button + popover ───────────────────────────────────────
         let tracks_btn = Button::builder()
             .icon_name("media-optical-symbolic")
-            .tooltip_text("Audio & Subtitle tracks")
+            .tooltip_text(t("Audio & Subtitle tracks"))
             .css_classes(vec!["flat"])
             .sensitive(false)
             .build();
@@ -221,7 +222,7 @@ impl PlayerControls {
         // ── Speed button + popover ────────────────────────────────────────
         let speed_btn = Button::builder()
             .label("1×")
-            .tooltip_text("Playback speed")
+            .tooltip_text(t("Playback speed"))
             .css_classes(vec!["flat"])
             .build();
         let speed_popover = Popover::new();
@@ -558,6 +559,16 @@ impl PlayerControls {
         &self.root
     }
 
+    pub fn relabel(&self) {
+        self.podcast_btn.set_tooltip_text(Some(t("Podcast mode — audio only (saves bandwidth)")));
+        self.screenshot_btn.set_tooltip_text(Some(t("Take screenshot")));
+        self.tracks_btn.set_tooltip_text(Some(t("Audio & Subtitle tracks")));
+        self.speed_btn.set_tooltip_text(Some(t("Playback speed")));
+        self.shuffle_btn.set_tooltip_text(Some(t("Shuffle")));
+        // Force tracks popover to rebuild on next update_tracks() call.
+        self.last_tracks.borrow_mut().clear();
+    }
+
     /// Returns true if any popover (speed, tracks) is currently open.
     /// Used by the auto-hide timer to prevent hiding the control bar while
     /// the user is navigating a dropdown.
@@ -679,7 +690,7 @@ impl PlayerControls {
 
         if !audio_tracks.is_empty() {
             let lbl = gtk::Label::builder()
-                .label("Audio")
+                .label(t("Audio"))
                 .halign(gtk::Align::Start)
                 .css_classes(vec!["heading"])
                 .build();
@@ -717,7 +728,7 @@ impl PlayerControls {
 
         if !sub_tracks.is_empty() {
             let lbl = gtk::Label::builder()
-                .label("Subtitles")
+                .label(t("Subtitles"))
                 .halign(gtk::Align::Start)
                 .css_classes(vec!["heading"])
                 .margin_top(if audio_tracks.is_empty() { 0 } else { 8 })
@@ -728,7 +739,7 @@ impl PlayerControls {
 
             // "Disable" option
             let none_check = gtk::CheckButton::builder()
-                .label("Disabled")
+                .label(t("Disabled"))
                 .active(sub_tracks.iter().all(|t| !t.selected))
                 .build();
             {

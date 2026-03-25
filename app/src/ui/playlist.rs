@@ -1,4 +1,5 @@
 use adw::{NavigationPage, ToolbarView, HeaderBar};
+use adw::prelude::NavigationPageExt;
 use gtk4::{self as gtk, ListBox, ListBoxRow, Label, ScrolledWindow, SelectionMode,
            Box, Orientation, Button, Image};
 use gtk4::prelude::*;
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::cell::RefCell;
 
+use crate::i18n::t;
 use crate::state::SharedState;
 use crate::player::PlayerCommand;
 
@@ -21,6 +23,8 @@ pub struct PlaylistPanel {
     list: ListBox,
     items: Items,
     state: SharedState,
+    header_title_label: gtk::Label,
+    ph_label: Label,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -311,7 +315,7 @@ impl PlaylistPanel {
             .css_classes(vec!["dim-label"])
             .build();
         let ph_label = Label::builder()
-            .label("Drop files or folders here")
+            .label(t("Drop files or folders here"))
             .css_classes(vec!["dim-label"])
             .build();
         placeholder.append(&ph_icon);
@@ -325,8 +329,9 @@ impl PlaylistPanel {
 
         let toolbar = ToolbarView::builder().content(&scroll).build();
 
+        let header_title_label = gtk::Label::new(Some(t("Playlist")));
         let header = HeaderBar::builder()
-            .title_widget(&gtk::Label::new(Some("Playlist")))
+            .title_widget(&header_title_label)
             .show_back_button(false)
             .show_start_title_buttons(false)
             .show_end_title_buttons(false)
@@ -335,7 +340,7 @@ impl PlaylistPanel {
 
         let page = NavigationPage::builder()
             .child(&toolbar)
-            .title("Playlist")
+            .title(t("Playlist"))
             .build();
 
         // Row click → play from beginning (cancel any session-restore seek)
@@ -357,11 +362,17 @@ impl PlaylistPanel {
             });
         }
 
-        Self { page, list, items, state }
+        Self { page, list, items, state, header_title_label, ph_label }
     }
 
     pub fn widget(&self) -> &NavigationPage {
         &self.page
+    }
+
+    pub fn relabel(&self) {
+        self.page.set_title(t("Playlist"));
+        self.header_title_label.set_label(t("Playlist"));
+        self.ph_label.set_label(t("Drop files or folders here"));
     }
 
     pub fn add_item(&self, title: &str, path: &PathBuf) {

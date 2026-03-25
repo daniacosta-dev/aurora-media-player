@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -305,12 +305,12 @@ impl MediaWindow {
 
         // Playlist is created first so it can be referenced in the header callback.
         let playlist = Rc::new(PlaylistPanel::new(state.clone()));
-        let video = VideoArea::new(state.clone());
+        let video = Rc::new(VideoArea::new(state.clone()));
         let controls = Rc::new(PlayerControls::new(state.clone(), {
             let toast_w = toast_overlay.downgrade();
             move || {
                 if let Some(t) = toast_w.upgrade() {
-                    t.add_toast(adw::Toast::new("Screenshot saved"));
+                    t.add_toast(adw::Toast::new(crate::i18n::t("Screenshot saved")));
                 }
             }
         }));
@@ -396,7 +396,15 @@ impl MediaWindow {
             })
         };
 
-        let header = {
+        // Slot filled after `header` is created — lets the language-change callback
+        // reach back into the main-window components without a circular dependency.
+        let lang_change_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+        let on_language_change: Rc<dyn Fn()> = {
+            let slot = lang_change_slot.clone();
+            Rc::new(move || { if let Some(f) = &*slot.borrow() { f(); } })
+        };
+
+        let header = Rc::new({
             let state_file = state.clone();
             let playlist_file = playlist.clone();
             let state_url = state.clone();
@@ -451,8 +459,23 @@ impl MediaWindow {
                     }
                 },
                 on_ui_mode_change,
+                on_language_change,
             )
-        };
+        });
+
+        // Fill the slot now that all components exist.
+        *lang_change_slot.borrow_mut() = Some({
+            let header_c   = header.clone();
+            let controls_c = controls.clone();
+            let playlist_c = playlist.clone();
+            let video_c2   = video.clone();
+            Rc::new(move || {
+                header_c.relabel();
+                controls_c.relabel();
+                playlist_c.relabel();
+                video_c2.relabel();
+            })
+        });
 
         let push_recent = header.push_recent_fn.clone();
 
@@ -879,7 +902,7 @@ impl MediaWindow {
         let state_c = state.clone();
         let controls_c = controls.clone();
         let playlist_c = playlist.clone();
-        let video_c = Rc::new(video);
+        let video_c = video.clone();
         let mpris_c = mpris.clone();
         let mpris_cmd_rx_c = mpris_cmd_rx.clone();
         let toast_overlay_c = toast_overlay.clone();

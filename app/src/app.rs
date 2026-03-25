@@ -83,6 +83,11 @@ impl AuroraMediaApp {
             adw::init().expect("Failed to initialize libadwaita");
             gtk::Window::set_default_icon_name(APP_ID);
             load_css();
+            // Apply saved language before any widget is built.
+            let saved_lang = crate::ui::headerbar::load_app_settings()
+                .language
+                .unwrap_or_else(|| "en".into());
+            crate::i18n::set(crate::i18n::Lang::from_code(&saved_lang));
         });
 
         app.connect_activate(|app| {

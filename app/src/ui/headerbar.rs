@@ -9,6 +9,7 @@ use gtk4::{self as gtk, Button, ToggleButton};
 use gtk4::prelude::*;
 use gio;
 
+use crate::i18n::t;
 use crate::state::SharedState;
 
 // ── Recent files persistence ──────────────────────────────────────────────────
@@ -47,6 +48,14 @@ pub struct MediaHeaderBar {
     pub open_url_btn: Button,
     pub open_sub_btn: Button,
     pub settings_btn: Button,
+    // ── Labels kept for live relabelling ─────────────────────────────────
+    file_btn: Button,
+    open_file_lbl: gtk::Label,
+    open_url_lbl: gtk::Label,
+    open_sub_lbl: gtk::Label,
+    recent_row_lbl: gtk::Label,
+    screenshot_folder_lbl: gtk::Label,
+    report_issue_lbl: gtk::Label,
 }
 
 impl MediaHeaderBar {
@@ -67,11 +76,12 @@ impl MediaHeaderBar {
         on_open_subtitle: impl Fn(PathBuf) + 'static,
         on_open_recent: impl Fn(PathBuf) + 'static,
         on_ui_mode_change: Rc<dyn Fn(&str)>,
+        on_language_change: Rc<dyn Fn()>,
     ) -> Self {
         let header = HeaderBar::new();
 
         // ── File menu ─────────────────────────────────────────────────────────────
-        let file_btn = Button::builder().label("File").build();
+        let file_btn = Button::builder().label(t("File")).build();
 
         // Main popover — autohide closes it when clicking outside
         let file_popover = gtk::Popover::new();
@@ -86,8 +96,8 @@ impl MediaHeaderBar {
             .build();
         file_popover.set_child(Some(&menu_box));
 
-        // Helper: flat button styled as a menu item
-        let mk_item = |icon: &str, label: &str| -> Button {
+        // Helper: flat button styled as a menu item — returns (Button, inner Label).
+        let mk_item = |icon: &str, label: &str| -> (Button, gtk::Label) {
             let btn = Button::new();
             btn.add_css_class("flat");
             btn.add_css_class("file-menu-item");
@@ -105,15 +115,15 @@ impl MediaHeaderBar {
                 .build();
             row.append(&lbl);
             btn.set_child(Some(&row));
-            btn
+            (btn, lbl)
         };
 
-        let open_file_btn = mk_item("document-open-symbolic",       "Open File…");
-        let open_url_btn  = mk_item("insert-link-symbolic",          "Open URL or Playlist…");
-        let open_sub_btn  = mk_item("media-view-subtitles-symbolic", "Load Subtitle File…");
+        let (open_file_btn, open_file_lbl) = mk_item("document-open-symbolic",       t("Open File…"));
+        let (open_url_btn,  open_url_lbl)  = mk_item("insert-link-symbolic",          t("Open URL or Playlist…"));
+        let (open_sub_btn,  open_sub_lbl)  = mk_item("media-view-subtitles-symbolic", t("Load Subtitle File…"));
 
         // Recent Files row — right-arrow indicates a submenu
-        let recent_row_btn = {
+        let (recent_row_btn, recent_row_lbl) = {
             let btn = Button::new();
             btn.add_css_class("flat");
             btn.add_css_class("file-menu-item");
@@ -125,18 +135,18 @@ impl MediaHeaderBar {
                 .build();
             row.append(&gtk::Image::from_icon_name("document-open-recent-symbolic"));
             let lbl = gtk::Label::builder()
-                .label("Recent Files")
+                .label(t("Recent Files"))
                 .halign(gtk::Align::Start)
                 .hexpand(true)
                 .build();
             row.append(&lbl);
             row.append(&gtk::Image::from_icon_name("go-next-symbolic"));
             btn.set_child(Some(&row));
-            btn
+            (btn, lbl)
         };
 
-        let screenshot_folder_btn = mk_item("camera-photo-symbolic",  "Open Screenshot Folder");
-        let report_issue_btn      = mk_item("bug-symbolic",            "Report Issue");
+        let (screenshot_folder_btn, screenshot_folder_lbl) = mk_item("camera-photo-symbolic", t("Open Screenshot Folder"));
+        let (report_issue_btn, report_issue_lbl)           = mk_item("bug-symbolic",           t("Report Issue"));
         report_issue_btn.set_cursor_from_name(Some("pointer"));
 
         menu_box.append(&open_file_btn);
@@ -249,14 +259,14 @@ impl MediaHeaderBar {
         // ── Playlist toggle ───────────────────────────────────────────────
         let playlist_btn = ToggleButton::builder()
             .icon_name("view-list-symbolic")
-            .tooltip_text("Toggle playlist")
+            .tooltip_text(t("Toggle playlist"))
             .build();
         header.pack_end(&playlist_btn);
 
         // ── Settings button ───────────────────────────────────────────────
         let settings_btn = Button::builder()
             .icon_name("preferences-system-symbolic")
-            .tooltip_text("Settings")
+            .tooltip_text(t("Settings"))
             .build();
         header.pack_end(&settings_btn);
 
@@ -300,12 +310,13 @@ impl MediaHeaderBar {
         // ── Wire: settings ────────────────────────────────────────────────
         settings_btn.connect_clicked({
             let cb = on_ui_mode_change.clone();
+            let lang_cb = on_language_change.clone();
             move |btn| {
                 let Some(parent) = btn.root().and_downcast::<gtk::Window>() else { return };
                 // Toggle: if settings is already open, close it.
                 for w in gtk::Window::list_toplevels() {
                     if let Some(win) = w.downcast_ref::<gtk::Window>() {
-                        if win.title().as_deref() == Some("Settings")
+                        if win.widget_name() == "settings-dialog"
                             && win.transient_for().as_ref() == Some(&parent)
                         {
                             win.close();
@@ -313,7 +324,7 @@ impl MediaHeaderBar {
                         }
                     }
                 }
-                show_settings_dialog(&parent, cb.clone());
+                show_settings_dialog(&parent, cb.clone(), lang_cb.clone());
             }
         });
 
@@ -351,7 +362,7 @@ impl MediaHeaderBar {
                 filters.append(&audio_filter);
                 filters.append(&playlist_filter);
                 let dialog = gtk::FileDialog::builder()
-                    .title("Open Media File").modal(true).filters(&filters).build();
+                    .title(t("Open Media File")).modal(true).filters(&filters).build();
                 let parent = btn_w.upgrade().and_then(|b| b.root()).and_downcast::<gtk::Window>();
                 dialog.open(parent.as_ref(), None::<&gio::Cancellable>, move |result| {
                     if let Ok(file) = result {
@@ -391,7 +402,7 @@ impl MediaHeaderBar {
                 let filters = gio::ListStore::new::<gtk::FileFilter>();
                 filters.append(&sub_filter);
                 let dialog = gtk::FileDialog::builder()
-                    .title("Open Subtitle File").modal(true).filters(&filters).build();
+                    .title(t("Open Subtitle File")).modal(true).filters(&filters).build();
                 let parent = btn_w.upgrade().and_then(|b| b.root()).and_downcast::<gtk::Window>();
                 dialog.open(parent.as_ref(), None::<&gio::Cancellable>, move |result| {
                     if let Ok(file) = result {
@@ -415,7 +426,7 @@ impl MediaHeaderBar {
                 let entries = load_recent();
                 if entries.is_empty() {
                     let lbl = gtk::Label::builder()
-                        .label("No recent files")
+                        .label(t("No recent files"))
                         .margin_start(12).margin_end(12)
                         .margin_top(6).margin_bottom(6)
                         .css_classes(["dim-label"])
@@ -467,7 +478,7 @@ impl MediaHeaderBar {
                         remove_btn.add_css_class("recent-remove-btn");
                         remove_btn.set_valign(gtk::Align::Center);
                         remove_btn.set_cursor_from_name(Some("pointer"));
-                        remove_btn.set_tooltip_text(Some("Remove from recents"));
+                        remove_btn.set_tooltip_text(Some(t("Remove from recents")));
                         let entry_path = entry.path.clone();
                         let rbox_w = rbox.clone(); // gtk::Box — already upgraded in this closure
                         let outer_w: glib::WeakRef<gtk::Box> = outer.downgrade();
@@ -510,12 +521,28 @@ impl MediaHeaderBar {
             },
         );
 
-        Self { header, playlist_btn, push_recent_fn, window_title,
-               open_file_btn, open_url_btn, open_sub_btn, settings_btn }
+        Self {
+            header, playlist_btn, push_recent_fn, window_title,
+            open_file_btn, open_url_btn, open_sub_btn, settings_btn,
+            file_btn, open_file_lbl, open_url_lbl, open_sub_lbl,
+            recent_row_lbl, screenshot_folder_lbl, report_issue_lbl,
+        }
     }
 
     pub fn widget(&self) -> &HeaderBar {
         &self.header
+    }
+
+    pub fn relabel(&self) {
+        self.file_btn.set_label(t("File"));
+        self.open_file_lbl.set_label(t("Open File…"));
+        self.open_url_lbl.set_label(t("Open URL or Playlist…"));
+        self.open_sub_lbl.set_label(t("Load Subtitle File…"));
+        self.recent_row_lbl.set_label(t("Recent Files"));
+        self.screenshot_folder_lbl.set_label(t("Open Screenshot Folder"));
+        self.report_issue_lbl.set_label(t("Report Issue"));
+        self.playlist_btn.set_tooltip_text(Some(t("Toggle playlist")));
+        self.settings_btn.set_tooltip_text(Some(t("Settings")));
     }
 
     /// Update the header title/subtitle with the currently playing track.
@@ -575,6 +602,8 @@ fn write_saved_playlists(saved: &SavedPlaylists) {
 pub struct AppSettings {
     /// "system" | "light" | "dark"
     pub color_scheme: Option<String>,
+    /// "en" | "es" — UI language (default: "en")
+    pub language: Option<String>,
     #[serde(default = "default_volume")]
     pub volume: f64,
     #[serde(default)]
@@ -613,21 +642,22 @@ fn adw_scheme(key: &str) -> adw::ColorScheme {
 
 // ── Settings dialog ───────────────────────────────────────────────────────────
 
-fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)>) {
+fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)>, on_language_change: Rc<dyn Fn()>) {
     let dialog = adw::Window::builder()
-        .title("Settings")
+        .title(t("Settings"))
         .transient_for(parent)
         .modal(true)
         .default_width(520)
         .default_height(520)
         .resizable(false)
         .build();
+    dialog.set_widget_name("settings-dialog");
 
     let header = adw::HeaderBar::new();
 
     // ── Appearance section ────────────────────────────────────────────────
     let appearance_lbl = gtk::Label::builder()
-        .label("Appearance")
+        .label(t("Appearance"))
         .halign(gtk::Align::Start)
         .css_classes(["heading"])
         .margin_top(18)
@@ -648,22 +678,22 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .build();
 
     let theme_row = adw::ActionRow::builder()
-        .title("Theme")
+        .title(t("Theme"))
         .build();
 
     let btn_system = gtk::ToggleButton::builder()
-        .label("System")
+        .label(t("System"))
         .active(saved_scheme == "system")
         .valign(gtk::Align::Center)
         .build();
     let btn_light = gtk::ToggleButton::builder()
-        .label("Light")
+        .label(t("Light"))
         .active(saved_scheme == "light")
         .group(&btn_system)
         .valign(gtk::Align::Center)
         .build();
     let btn_dark = gtk::ToggleButton::builder()
-        .label("Dark")
+        .label(t("Dark"))
         .active(saved_scheme == "dark")
         .group(&btn_system)
         .valign(gtk::Align::Center)
@@ -685,7 +715,7 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
 
     // ── Keyboard shortcuts section ────────────────────────────────────────
     let shortcuts_lbl = gtk::Label::builder()
-        .label("Keyboard Shortcuts")
+        .label(t("Keyboard Shortcuts"))
         .halign(gtk::Align::Start)
         .css_classes(["heading"])
         .margin_top(24)
@@ -707,7 +737,7 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
 
     // ── Playback ──────────────────────────────────────────────────────────
     let playback_lbl = gtk::Label::builder()
-        .label("Playback")
+        .label(t("Playback"))
         .halign(gtk::Align::Start)
         .css_classes(["caption", "dim-label"])
         .margin_top(6)
@@ -720,15 +750,15 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .margin_start(12)
         .margin_end(12)
         .build();
-    playback_list.append(&mk_sc("Play / Pause",    "space"));
-    playback_list.append(&mk_sc("Next track",      "n"));
-    playback_list.append(&mk_sc("Previous track",  "b"));
-    playback_list.append(&mk_sc("Mute",            "m"));
-    playback_list.append(&mk_sc("Screenshot",      "s"));
+    playback_list.append(&mk_sc(t("Play / Pause"),   "space"));
+    playback_list.append(&mk_sc(t("Next track"),     "n"));
+    playback_list.append(&mk_sc(t("Previous track"), "b"));
+    playback_list.append(&mk_sc(t("Mute"),           "m"));
+    playback_list.append(&mk_sc(t("Screenshot"),     "s"));
 
     // ── Seek & Volume ─────────────────────────────────────────────────────
     let seek_lbl = gtk::Label::builder()
-        .label("Seek & Volume")
+        .label(t("Seek & Volume"))
         .halign(gtk::Align::Start)
         .css_classes(["caption", "dim-label"])
         .margin_top(12)
@@ -741,16 +771,16 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .margin_start(12)
         .margin_end(12)
         .build();
-    seek_list.append(&mk_sc("Seek −5 s",       "Left"));
-    seek_list.append(&mk_sc("Seek +5 s",       "Right"));
-    seek_list.append(&mk_sc("Seek −30 s",      "<Shift>Left"));
-    seek_list.append(&mk_sc("Seek +30 s",      "<Shift>Right"));
-    seek_list.append(&mk_sc("Volume up",       "Up"));
-    seek_list.append(&mk_sc("Volume down",     "Down"));
+    seek_list.append(&mk_sc(t("Seek −5 s"),   "Left"));
+    seek_list.append(&mk_sc(t("Seek +5 s"),   "Right"));
+    seek_list.append(&mk_sc(t("Seek −30 s"),  "<Shift>Left"));
+    seek_list.append(&mk_sc(t("Seek +30 s"),  "<Shift>Right"));
+    seek_list.append(&mk_sc(t("Volume up"),   "Up"));
+    seek_list.append(&mk_sc(t("Volume down"), "Down"));
 
     // ── Speed & Video ─────────────────────────────────────────────────────
     let video_lbl = gtk::Label::builder()
-        .label("Speed & Video")
+        .label(t("Speed & Video"))
         .halign(gtk::Align::Start)
         .css_classes(["caption", "dim-label"])
         .margin_top(12)
@@ -763,15 +793,15 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .margin_start(12)
         .margin_end(12)
         .build();
-    video_list.append(&mk_sc("Speed up",          "bracketright"));
-    video_list.append(&mk_sc("Speed down",        "bracketleft"));
-    video_list.append(&mk_sc("Reset speed",       "BackSpace"));
-    video_list.append(&mk_sc("Fullscreen",        "f"));
-    video_list.append(&mk_sc("Exit fullscreen",   "Escape"));
+    video_list.append(&mk_sc(t("Speed up"),        "bracketright"));
+    video_list.append(&mk_sc(t("Speed down"),      "bracketleft"));
+    video_list.append(&mk_sc(t("Reset speed"),     "BackSpace"));
+    video_list.append(&mk_sc(t("Fullscreen"),      "f"));
+    video_list.append(&mk_sc(t("Exit fullscreen"), "Escape"));
 
     // ── App ───────────────────────────────────────────────────────────────
     let app_lbl = gtk::Label::builder()
-        .label("App")
+        .label(t("App"))
         .halign(gtk::Align::Start)
         .css_classes(["caption", "dim-label"])
         .margin_top(12)
@@ -784,11 +814,11 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .margin_start(12)
         .margin_end(12)
         .build();
-    app_list.append(&mk_sc("Open file",        "<Primary>o"));
-    app_list.append(&mk_sc("Open URL",         "<Primary>u"));
-    app_list.append(&mk_sc("Load subtitle",    "<Primary>t"));
-    app_list.append(&mk_sc("Toggle playlist",  "<Primary>p"));
-    app_list.append(&mk_sc("Settings",         "<Primary>comma"));
+    app_list.append(&mk_sc(t("Open file"),       "<Primary>o"));
+    app_list.append(&mk_sc(t("Open URL"),        "<Primary>u"));
+    app_list.append(&mk_sc(t("Load subtitle"),   "<Primary>t"));
+    app_list.append(&mk_sc(t("Toggle playlist"), "<Primary>p"));
+    app_list.append(&mk_sc(t("Settings"),        "<Primary>comma"));
 
     // ── Footer ────────────────────────────────────────────────────────────
     let footer = gtk::Label::builder()
@@ -803,13 +833,15 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .margin_start(12)
         .margin_end(12)
         .build();
-    footer.set_markup(
-        "If you like Aurora Media Player, consider\n<a href=\"https://github.com/daniacosta-dev/aurora-media-player\">⭐ starring it on GitHub</a>"
-    );
+    footer.set_markup(&format!(
+        "{}\n<a href=\"https://github.com/daniacosta-dev/aurora-media-player\">{}</a>",
+        t("If you like Aurora Media Player, consider"),
+        t("⭐ starring it on GitHub"),
+    ));
 
     // ── Control bar section ─────────────────────────────────────────────
     let layout_lbl = gtk::Label::builder()
-        .label("Control bar")
+        .label(t("Control bar"))
         .halign(gtk::Align::Start)
         .css_classes(["heading"])
         .margin_top(24)
@@ -830,16 +862,16 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .build();
 
     let layout_row = adw::ActionRow::builder()
-        .title("Control bar style")
+        .title(t("Control bar style"))
         .build();
 
     let btn_floating = gtk::ToggleButton::builder()
-        .label("Floating")
+        .label(t("Floating"))
         .active(saved_ui_mode == "floating")
         .valign(gtk::Align::Center)
         .build();
     let btn_fixed = gtk::ToggleButton::builder()
-        .label("Fixed")
+        .label(t("Fixed"))
         .active(saved_ui_mode == "fixed")
         .group(&btn_floating)
         .valign(gtk::Align::Center)
@@ -858,6 +890,57 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
     layout_row.add_suffix(&layout_btns);
     layout_list.append(&layout_row);
 
+    // ── Language section ─────────────────────────────────────────────────
+    let lang_section_lbl = gtk::Label::builder()
+        .label(t("Language"))
+        .halign(gtk::Align::Start)
+        .css_classes(["heading"])
+        .margin_top(24)
+        .margin_bottom(6)
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let saved_lang = load_app_settings()
+        .language
+        .unwrap_or_else(|| "en".into());
+
+    let lang_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_start(12)
+        .margin_end(12)
+        .build();
+
+    let lang_row = adw::ActionRow::builder()
+        .title(t("Interface language"))
+        .build();
+
+    let btn_en = gtk::ToggleButton::builder()
+        .label(t("English"))
+        .active(saved_lang == "en")
+        .valign(gtk::Align::Center)
+        .build();
+    let btn_es = gtk::ToggleButton::builder()
+        .label(t("Spanish"))
+        .active(saved_lang == "es")
+        .group(&btn_en)
+        .valign(gtk::Align::Center)
+        .build();
+
+    let lang_btns = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .css_classes(["linked"])
+        .valign(gtk::Align::Center)
+        .margin_top(8)
+        .margin_bottom(8)
+        .build();
+    lang_btns.append(&btn_en);
+    lang_btns.append(&btn_es);
+
+    lang_row.add_suffix(&lang_btns);
+    lang_list.append(&lang_row);
+
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .margin_bottom(32)
@@ -866,6 +949,8 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
     content.append(&theme_list);
     content.append(&layout_lbl);
     content.append(&layout_list);
+    content.append(&lang_section_lbl);
+    content.append(&lang_list);
     content.append(&shortcuts_lbl);
     content.append(&playback_lbl);
     content.append(&playback_list);
@@ -924,6 +1009,27 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
             if btn.is_active() {
                 let mut s = load_app_settings(); s.ui_mode = Some("fixed".into()); save_app_settings(&s);
                 cb("fixed");
+            }
+        }
+    });
+
+    btn_en.connect_toggled({
+        let lang_cb = on_language_change.clone();
+        move |btn| {
+            if btn.is_active() {
+                crate::i18n::set(crate::i18n::Lang::En);
+                let mut s = load_app_settings(); s.language = Some("en".into()); save_app_settings(&s);
+                lang_cb();
+            }
+        }
+    });
+    btn_es.connect_toggled({
+        let lang_cb = on_language_change.clone();
+        move |btn| {
+            if btn.is_active() {
+                crate::i18n::set(crate::i18n::Lang::Es);
+                let mut s = load_app_settings(); s.language = Some("es".into()); save_app_settings(&s);
+                lang_cb();
             }
         }
     });
@@ -1028,7 +1134,7 @@ fn show_url_playlist_dialog(
     on_load: Rc<impl Fn(Vec<(String, String)>) + 'static>,
 ) {
     let dialog = adw::Window::builder()
-        .title("URL Playlist")
+        .title(t("URL Playlist"))
         .transient_for(parent)
         .modal(true)
         .default_width(520)
@@ -1038,7 +1144,7 @@ fn show_url_playlist_dialog(
     // ── Header ────────────────────────────────────────────────────────────
     let header = adw::HeaderBar::new();
     let play_btn = Button::builder()
-        .label("Play")
+        .label(t("Play"))
         .css_classes(["suggested-action"])
         .sensitive(false)
         .build();
@@ -1065,7 +1171,7 @@ fn show_url_playlist_dialog(
         .margin_end(12)
         .build();
     add_label.append(&gtk::Image::from_icon_name("list-add-symbolic"));
-    add_label.append(&gtk::Label::new(Some("Add URL")));
+    add_label.append(&gtk::Label::new(Some(t("Add URL"))));
     add_row.set_child(Some(&add_label));
     list_box.append(&add_row);
 
@@ -1078,11 +1184,11 @@ fn show_url_playlist_dialog(
         .margin_start(12)
         .margin_end(12)
         .build();
-    let name_row = adw::EntryRow::builder().title("Save as playlist…").build();
+    let name_row = adw::EntryRow::builder().title(t("Save as playlist…")).build();
     let save_btn = Button::builder()
-        .label("Save")
+        .label(t("Save"))
         .css_classes(["flat"])
-        .tooltip_text("Save playlist")
+        .tooltip_text(t("Save playlist"))
         .sensitive(false)
         .build();
     name_row.add_suffix(&save_btn);
@@ -1165,19 +1271,19 @@ fn show_url_playlist_dialog(
                     .icon_name("document-edit-symbolic")
                     .valign(gtk::Align::Center)
                     .css_classes(["flat", "circular"])
-                    .tooltip_text("Edit")
+                    .tooltip_text(t("Edit"))
                     .build();
                 let load_btn = Button::builder()
                     .icon_name("media-playback-start-symbolic")
                     .valign(gtk::Align::Center)
                     .css_classes(["flat", "circular"])
-                    .tooltip_text("Play")
+                    .tooltip_text(t("Play"))
                     .build();
                 let delete_btn = Button::builder()
                     .icon_name("edit-delete-symbolic")
                     .valign(gtk::Align::Center)
                     .css_classes(["flat", "circular"])
-                    .tooltip_text("Delete")
+                    .tooltip_text(t("Delete"))
                     .build();
                 hbox.append(&label);
                 hbox.append(&edit_btn);
@@ -1299,7 +1405,7 @@ fn show_url_playlist_dialog(
                 .icon_name("list-remove-symbolic")
                 .valign(gtk::Align::Center)
                 .css_classes(["flat", "circular"])
-                .tooltip_text("Remove")
+                .tooltip_text(t("Remove"))
                 .build();
             entry_row.add_suffix(&warn_icon);
             entry_row.add_suffix(&remove_btn);
