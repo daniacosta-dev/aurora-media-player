@@ -415,11 +415,17 @@ impl MediaHeaderBar {
         // ── Recent files ──────────────────────────────────────────────────
         let on_open_recent = Rc::new(on_open_recent);
 
+        // Slot filled after populate_recent is defined, so button click handlers
+        // inside populate_recent can call populate_recent without a circular dep.
+        let repopulate_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> =
+            Rc::new(RefCell::new(None));
+
         let populate_recent: Rc<dyn Fn()> = {
             let rbox = recent_box.downgrade();
             let fp   = file_popover.downgrade();
             let rs   = recent_sub.downgrade();
             let on_open_recent = on_open_recent.clone();
+            let repopulate_slot = repopulate_slot.clone();
             Rc::new(move || {
                 let Some(rbox) = rbox.upgrade() else { return };
                 while let Some(child) = rbox.first_child() { rbox.remove(&child); }
@@ -462,12 +468,25 @@ impl MediaHeaderBar {
                         btn.set_child(Some(&row));
                         btn.set_cursor_from_name(Some("pointer"));
                         let path = std::path::PathBuf::from(&entry.path);
+                        let entry_path_str = entry.path.clone();
+                        let entry_title_str = entry.title.clone();
                         let on_open_c = on_open_recent.clone();
                         let fp_w = fp.clone();
                         let rs_w = rs.clone();
+                        let repopulate_w = repopulate_slot.clone();
                         btn.connect_clicked(move |_| {
                             if let Some(r) = rs_w.upgrade() { r.popdown(); }
                             if let Some(f) = fp_w.upgrade() { f.popdown(); }
+                            // Move this entry to the top of the list immediately.
+                            let mut entries = load_recent();
+                            entries.retain(|e| e.path != entry_path_str);
+                            entries.insert(0, RecentEntry {
+                                path: entry_path_str.clone(),
+                                title: entry_title_str.clone(),
+                            });
+                            entries.truncate(8);
+                            save_recent(&entries);
+                            if let Some(f) = &*repopulate_w.borrow() { f(); }
                             on_open_c(path.clone());
                         });
 
@@ -505,17 +524,23 @@ impl MediaHeaderBar {
                 }
             })
         };
+        *repopulate_slot.borrow_mut() = Some(populate_recent.clone());
         populate_recent();
 
         // ── push_recent_fn ────────────────────────────────────────────────
         let populate_recent_c = populate_recent.clone();
         let push_recent_fn: Rc<dyn Fn(&std::path::Path, &str)> = Rc::new(
             move |path: &std::path::Path, title: &str| {
+                // M3U playlists are never added to recent files.
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext.eq_ignore_ascii_case("m3u") || ext.eq_ignore_ascii_case("m3u8") {
+                    return;
+                }
                 let mut entries = load_recent();
                 let path_str = path.to_string_lossy().to_string();
                 entries.retain(|e| e.path != path_str);
                 entries.insert(0, RecentEntry { path: path_str, title: title.to_string() });
-                entries.truncate(10);
+                entries.truncate(8);
                 save_recent(&entries);
                 populate_recent_c();
             },

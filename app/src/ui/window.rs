@@ -1008,45 +1008,47 @@ impl MediaWindow {
                 }
             }
 
-            // ── Push to recent files when playback starts ───────────────
-            // Local files: push immediately (title is known from the filename).
-            // URL items: mark as pending — defer until yt-dlp resolves the title.
-            if was_idle && !idle {
-                if let Some(idx) = state_c.borrow().current_idx {
-                    let path = state_c.borrow().playlist.get(idx).cloned();
-                    if let Some(ref path) = path {
-                        let path_str = path.to_string_lossy();
-                        if path_str.starts_with("http://") || path_str.starts_with("https://") {
-                            recent_pending_idx.set(Some(idx));
-                        } else {
-                            // Use the file stem — mpv's media_title may still reflect
-                            // the previous file at this early idle→playing transition.
-                            let display_title = title_for_path(path);
-                            push_recent_c(path, &display_title);
-                        }
-                    }
-                }
-            }
-
-            // If a pending URL item stops playing before the title resolved, save what we have.
-            if idle && !was_idle {
-                if let Some(pending) = recent_pending_idx.get() {
-                    let path = state_c.borrow().playlist.get(pending).cloned();
-                    if let Some(path) = path {
-                        let best = playlist_c.item_title(pending)
-                            .unwrap_or_else(|| title_for_path(&path));
-                        push_recent_c(&path, &best);
-                    }
-                    recent_pending_idx.set(None);
-                }
-            }
-
-            // ── Sync playlist selection with current_idx ────────────────
-            // Handles prev/next button clicks in controls.rs which update
-            // state.current_idx but don't have access to PlaylistPanel.
+            // ── Recent files + playlist selection sync ───────────────────
+            // Both are driven by current_idx changes so we handle them together.
+            // This fires on every track change: initial play, auto-advance, prev/next,
+            // and after idle (was_idle is no longer needed for recent tracking).
             {
                 let cur_idx = state_c.borrow().current_idx;
+
+                // Flush a pending URL recent entry when the player goes idle or
+                // moves to a different track before the title could resolve.
+                if let Some(pending) = recent_pending_idx.get() {
+                    let track_changed = cur_idx != Some(pending);
+                    if idle || track_changed {
+                        let path = state_c.borrow().playlist.get(pending).cloned();
+                        if let Some(path) = path {
+                            let best = playlist_c.item_title(pending)
+                                .unwrap_or_else(|| title_for_path(&path));
+                            push_recent_c(&path, &best);
+                        }
+                        recent_pending_idx.set(None);
+                    }
+                }
+
                 if cur_idx != last_known_idx.get() {
+                    // New track started — add to recent (skip M3U, handled in push_recent_fn).
+                    if !idle {
+                        if let Some(idx) = cur_idx {
+                            let path = state_c.borrow().playlist.get(idx).cloned();
+                            if let Some(ref path) = path {
+                                let path_str = path.to_string_lossy();
+                                if path_str.starts_with("http://") || path_str.starts_with("https://") {
+                                    // URL: defer until yt-dlp resolves the real title.
+                                    recent_pending_idx.set(Some(idx));
+                                } else {
+                                    // Local file: title known immediately from filename.
+                                    push_recent_c(path, &title_for_path(path));
+                                }
+                            }
+                        }
+                    }
+
+                    // Sync playlist panel selection.
                     if let Some(idx) = cur_idx {
                         playlist_c.select_row(idx);
                     }
