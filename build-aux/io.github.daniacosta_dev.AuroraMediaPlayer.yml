@@ -92,8 +92,7 @@ modules:
       - type: git
         url: https://github.com/daniacosta-dev/aurora-media-player
         tag: v0.1.1
-        # Update commit hash after: git rev-parse v0.1.1
-        commit: FILL_IN_AFTER_TAGGING
+        commit: 3c78a0b2613bd57babb0aafb1a5c99c36f575601
       # Regenerate after any Cargo.lock change:
       #   pip install flatpak-builder-tools
       #   flatpak-cargo-generator.py Cargo.lock -o build-aux/cargo-sources.json
