@@ -12,6 +12,87 @@ use gio;
 use crate::i18n::t;
 use crate::state::SharedState;
 
+// ── Custom colour provider ─────────────────────────────────────────────────────
+// Kept in a thread-local so we can remove the old provider before applying new ones.
+thread_local! {
+    static CUSTOM_COLOR_PROVIDER: RefCell<Option<gtk::CssProvider>> = RefCell::new(None);
+}
+
+/// Re-reads `accent_color` / `window_bg_color` from settings and installs a
+/// CSS provider that overrides libadwaita's colour tokens.  Calling this with
+/// both fields set to `None` (i.e. "use system") removes any previous override.
+pub fn apply_custom_colors() {
+    let Some(display) = gdk4::Display::default() else { return };
+    let settings = load_app_settings();
+
+    log::debug!(
+        "apply_custom_colors: accent={:?} bg={:?}",
+        settings.accent_color,
+        settings.window_bg_color
+    );
+
+    // Remove previous custom provider (if any).
+    CUSTOM_COLOR_PROVIDER.with(|cell| {
+        let old = cell.borrow_mut().take();
+        if let Some(old_provider) = old {
+            gtk::StyleContext::remove_provider_for_display(&display, &old_provider);
+        }
+    });
+
+    let mut css = String::new();
+
+    if let Some(accent) = &settings.accent_color {
+        // @define-color for libadwaita ≤ 1.5; CSS custom properties for 1.6+
+        css.push_str(&format!(
+            "@define-color accent_color {accent}; \
+             @define-color accent_bg_color {accent}; \
+             @define-color accent_fg_color #ffffff; \
+             * {{ --accent-color: {accent}; --accent-bg-color: {accent}; --accent-fg-color: #ffffff; }}"
+        ));
+    }
+    if let Some(bg) = &settings.window_bg_color {
+        css.push_str(&format!(
+            "@define-color window_bg_color {bg}; \
+             @define-color view_bg_color {bg}; \
+             @define-color headerbar_bg_color {bg}; \
+             @define-color headerbar_backdrop_color {bg}; \
+             @define-color sidebar_bg_color {bg}; \
+             @define-color card_bg_color {bg}; \
+             @define-color popover_bg_color {bg}; \
+             @define-color dialog_bg_color {bg}; \
+             * {{ --window-bg-color: {bg}; --view-bg-color: {bg}; \
+                  --headerbar-bg-color: {bg}; --sidebar-bg-color: {bg}; \
+                  --card-bg-color: {bg}; --popover-bg-color: {bg}; }}"
+        ));
+    }
+    if let Some(fg) = &settings.text_color {
+        // Use the CSS `color` property on leaf elements only — NOT on containers.
+        // @window_fg_color is referenced in style.css for backgrounds/borders (seekbar
+        // trough, controls bar border, hover highlights) and must NOT be overridden.
+        css.push_str(&format!(
+            "label {{ color: {fg}; }} \
+             image {{ color: {fg}; }} \
+             scale:not(.seekbar) slider {{ background-color: {fg}; border-color: {fg}; }}"
+        ));
+    }
+
+    if !css.is_empty() {
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(&css);
+        // Use USER priority (800) — above APPLICATION (600) and any libadwaita
+        // internal accent-colour providers which run at SETTINGS+1 (401).
+        gtk::StyleContext::add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_USER,
+        );
+        CUSTOM_COLOR_PROVIDER.with(|cell| {
+            *cell.borrow_mut() = Some(provider);
+        });
+        log::debug!("apply_custom_colors: provider installed, CSS={css}");
+    }
+}
+
 // ── Recent files persistence ──────────────────────────────────────────────────
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -635,6 +716,12 @@ pub struct AppSettings {
     pub muted: bool,
     /// "floating" (overlay, auto-hide) | "fixed" (always-visible bottom bar)
     pub ui_mode: Option<String>,
+    /// Custom accent colour as a CSS colour string (e.g. "#ed5b00"), None = system
+    pub accent_color: Option<String>,
+    /// Custom window background colour as a CSS colour string, None = system
+    pub window_bg_color: Option<String>,
+    /// Custom text/icon foreground colour as a CSS colour string, None = system
+    pub text_color: Option<String>,
 }
 
 fn default_volume() -> f64 { 100.0 }
@@ -723,6 +810,12 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .group(&btn_system)
         .valign(gtk::Align::Center)
         .build();
+    let btn_custom = gtk::ToggleButton::builder()
+        .label(t("Custom"))
+        .active(saved_scheme == "custom")
+        .group(&btn_system)
+        .valign(gtk::Align::Center)
+        .build();
 
     let theme_btns = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
@@ -734,9 +827,183 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
     theme_btns.append(&btn_system);
     theme_btns.append(&btn_light);
     theme_btns.append(&btn_dark);
+    theme_btns.append(&btn_custom);
 
     theme_row.add_suffix(&theme_btns);
     theme_list.append(&theme_row);
+
+    // ── Custom colour pickers (revealed when Theme = Custom) ─────────────
+    let saved_settings = load_app_settings();
+    let accent_is_system = saved_settings.accent_color.is_none();
+    let bg_is_system     = saved_settings.window_bg_color.is_none();
+
+    // Helper: build one color row.
+    // Returns (ActionRow, ColorDialogButton, reset Button) so callers can wire them.
+    let make_color_row = |title: &str, dialog_title: &str, saved_hex: Option<&str>, fallback: &str| {
+        let dialog = gtk::ColorDialog::builder()
+            .with_alpha(false).title(dialog_title).build();
+        let initial = saved_hex
+            .and_then(|h| gdk4::RGBA::parse(h).ok())
+            .unwrap_or_else(|| gdk4::RGBA::parse(fallback).unwrap_or(gdk4::RGBA::WHITE));
+        let color_btn = gtk::ColorDialogButton::builder()
+            .dialog(&dialog).rgba(&initial)
+            .valign(gtk::Align::Center)
+            .build();
+        let reset_btn = gtk::Button::builder()
+            .icon_name("edit-clear-symbolic")
+            .tooltip_text(t("Reset to system default"))
+            .css_classes(["flat", "circular"])
+            .valign(gtk::Align::Center)
+            .visible(saved_hex.is_some())   // only shown when a custom color is set
+            .build();
+        let suffix = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4).valign(gtk::Align::Center).build();
+        suffix.append(&reset_btn);
+        suffix.append(&color_btn);
+        let subtitle = if let Some(h) = saved_hex { h.to_string() }
+                       else { t("System default").to_string() };
+        let row = adw::ActionRow::builder()
+            .title(title)
+            .subtitle(&subtitle)
+            .build();
+        row.add_suffix(&suffix);
+        (row, color_btn, reset_btn)
+    };
+
+    let (accent_row, accent_btn, accent_reset) = make_color_row(
+        t("Accent color"), t("Accent Color"),
+        saved_settings.accent_color.as_deref(), "#3584e4",
+    );
+    let (bg_row, bg_btn, bg_reset) = make_color_row(
+        t("Background color"), t("Background Color"),
+        saved_settings.window_bg_color.as_deref(), "#1c1c1c",
+    );
+    let (text_row, text_btn, text_reset) = make_color_row(
+        t("Text/Icon"), t("Text/Icon Color"),
+        saved_settings.text_color.as_deref(), "#ffffff",
+    );
+    // aliases used in btn_custom handler
+    let accent_sys_btn = accent_reset.clone();
+    let bg_sys_btn     = bg_reset.clone();
+    let text_sys_btn   = text_reset.clone();
+
+    // Wire: accent picker picked a new color
+    accent_btn.connect_rgba_notify({
+        let row   = accent_row.clone();
+        let reset = accent_reset.clone();
+        move |btn| {
+            let rgba = btn.rgba();
+            let hex = format!(
+                "#{:02x}{:02x}{:02x}",
+                (rgba.red()   * 255.0).round() as u8,
+                (rgba.green() * 255.0).round() as u8,
+                (rgba.blue()  * 255.0).round() as u8,
+            );
+            row.set_subtitle(&hex);
+            reset.set_visible(true);
+            let mut s = load_app_settings();
+            s.accent_color = Some(hex);
+            save_app_settings(&s);
+            apply_custom_colors();
+        }
+    });
+
+    // Wire: accent reset → back to system
+    accent_reset.connect_clicked({
+        let row = accent_row.clone();
+        move |btn| {
+            btn.set_visible(false);
+            row.set_subtitle(t("System default"));
+            let mut s = load_app_settings();
+            s.accent_color = None;
+            save_app_settings(&s);
+            apply_custom_colors();
+        }
+    });
+
+    // Wire: background picker picked a new color
+    bg_btn.connect_rgba_notify({
+        let row   = bg_row.clone();
+        let reset = bg_reset.clone();
+        move |btn| {
+            let rgba = btn.rgba();
+            let hex = format!(
+                "#{:02x}{:02x}{:02x}",
+                (rgba.red()   * 255.0).round() as u8,
+                (rgba.green() * 255.0).round() as u8,
+                (rgba.blue()  * 255.0).round() as u8,
+            );
+            row.set_subtitle(&hex);
+            reset.set_visible(true);
+            let mut s = load_app_settings();
+            s.window_bg_color = Some(hex);
+            save_app_settings(&s);
+            apply_custom_colors();
+        }
+    });
+
+    // Wire: background reset → back to system
+    bg_reset.connect_clicked({
+        let row = bg_row.clone();
+        move |btn| {
+            btn.set_visible(false);
+            row.set_subtitle(t("System default"));
+            let mut s = load_app_settings();
+            s.window_bg_color = None;
+            save_app_settings(&s);
+            apply_custom_colors();
+        }
+    });
+
+    // Wire: text picker
+    text_btn.connect_rgba_notify({
+        let row   = text_row.clone();
+        let reset = text_reset.clone();
+        move |btn| {
+            let rgba = btn.rgba();
+            let hex = format!(
+                "#{:02x}{:02x}{:02x}",
+                (rgba.red()   * 255.0).round() as u8,
+                (rgba.green() * 255.0).round() as u8,
+                (rgba.blue()  * 255.0).round() as u8,
+            );
+            row.set_subtitle(&hex);
+            reset.set_visible(true);
+            let mut s = load_app_settings();
+            s.text_color = Some(hex);
+            save_app_settings(&s);
+            apply_custom_colors();
+        }
+    });
+
+    // Wire: text reset → back to system
+    text_reset.connect_clicked({
+        let row = text_row.clone();
+        move |btn| {
+            btn.set_visible(false);
+            row.set_subtitle(t("System default"));
+            let mut s = load_app_settings();
+            s.text_color = None;
+            save_app_settings(&s);
+            apply_custom_colors();
+        }
+    });
+
+    let custom_colors_list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .margin_start(12).margin_end(12).margin_top(8)
+        .build();
+    custom_colors_list.append(&accent_row);
+    custom_colors_list.append(&bg_row);
+    custom_colors_list.append(&text_row);
+
+    let custom_revealer = gtk::Revealer::builder()
+        .child(&custom_colors_list)
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .reveal_child(saved_scheme == "custom")
+        .build();
 
     // ── Keyboard shortcuts section ────────────────────────────────────────
     let shortcuts_lbl = gtk::Label::builder()
@@ -972,6 +1239,7 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         .build();
     content.append(&appearance_lbl);
     content.append(&theme_list);
+    content.append(&custom_revealer);
     content.append(&layout_lbl);
     content.append(&layout_list);
     content.append(&lang_section_lbl);
@@ -1000,22 +1268,86 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
     dialog.set_content(Some(&toolbar_view));
 
     // Wire theme buttons → StyleManager + persistence
-    btn_system.connect_toggled(|btn| {
-        if btn.is_active() {
-            adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
-            let mut s = load_app_settings(); s.color_scheme = Some("system".into()); save_app_settings(&s);
+    btn_system.connect_toggled({
+        let revealer = custom_revealer.clone();
+        move |btn| {
+            if btn.is_active() {
+                adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
+                let mut s = load_app_settings();
+                s.color_scheme = Some("system".into());
+                s.accent_color = None;
+                s.window_bg_color = None;
+                s.text_color = None;
+                save_app_settings(&s);
+                apply_custom_colors();
+                revealer.set_reveal_child(false);
+            }
         }
     });
-    btn_light.connect_toggled(|btn| {
-        if btn.is_active() {
-            adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight);
-            let mut s = load_app_settings(); s.color_scheme = Some("light".into()); save_app_settings(&s);
+    btn_light.connect_toggled({
+        let revealer = custom_revealer.clone();
+        move |btn| {
+            if btn.is_active() {
+                adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight);
+                let mut s = load_app_settings();
+                s.color_scheme = Some("light".into());
+                s.accent_color = None;
+                s.window_bg_color = None;
+                s.text_color = None;
+                save_app_settings(&s);
+                apply_custom_colors();
+                revealer.set_reveal_child(false);
+            }
         }
     });
-    btn_dark.connect_toggled(|btn| {
-        if btn.is_active() {
-            adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
-            let mut s = load_app_settings(); s.color_scheme = Some("dark".into()); save_app_settings(&s);
+    btn_dark.connect_toggled({
+        let revealer = custom_revealer.clone();
+        move |btn| {
+            if btn.is_active() {
+                adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+                let mut s = load_app_settings();
+                s.color_scheme = Some("dark".into());
+                s.accent_color = None;
+                s.window_bg_color = None;
+                s.text_color = None;
+                save_app_settings(&s);
+                apply_custom_colors();
+                revealer.set_reveal_child(false);
+            }
+        }
+    });
+    btn_custom.connect_toggled({
+        let revealer = custom_revealer.clone();
+        let accent_btn = accent_btn.clone();
+        let accent_reset = accent_reset.clone();
+        let bg_btn = bg_btn.clone();
+        let bg_reset = bg_reset.clone();
+        let text_btn = text_btn.clone();
+        let text_reset = text_reset.clone();
+        move |btn| {
+            if btn.is_active() {
+                adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
+                let mut s = load_app_settings();
+                s.color_scheme = Some("custom".into());
+                // Always snapshot every button's current RGBA so that
+                // clicking "Select" without moving the picker still applies
+                // the color (notify::rgba won't fire if the value didn't change).
+                let rgba_hex = |rgba: gdk4::RGBA| format!(
+                    "#{:02x}{:02x}{:02x}",
+                    (rgba.red()   * 255.0).round() as u8,
+                    (rgba.green() * 255.0).round() as u8,
+                    (rgba.blue()  * 255.0).round() as u8,
+                );
+                s.accent_color     = Some(rgba_hex(accent_btn.rgba()));
+                s.window_bg_color  = Some(rgba_hex(bg_btn.rgba()));
+                s.text_color       = Some(rgba_hex(text_btn.rgba()));
+                accent_reset.set_visible(true);
+                bg_reset.set_visible(true);
+                text_reset.set_visible(true);
+                save_app_settings(&s);
+                apply_custom_colors();
+                revealer.set_reveal_child(true);
+            }
         }
     });
 
@@ -1059,6 +1391,10 @@ fn show_settings_dialog(parent: &gtk::Window, on_ui_mode_change: Rc<dyn Fn(&str)
         }
     });
 
+    dialog.connect_close_request(|_| {
+        apply_custom_colors();
+        glib::Propagation::Proceed
+    });
     dialog.present();
 }
 

@@ -21,6 +21,8 @@ finish-args:
   - --talk-name=org.mpris.MediaPlayer2.*
   # xdg-desktop-portal for file chooser (used by GTK FileDialog)
   - --talk-name=org.freedesktop.portal.Desktop
+  # libmpv and libplacebo install to lib64 on x86_64; expose it to the runtime linker
+  - --env=LD_LIBRARY_PATH=/app/lib64
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
@@ -119,7 +121,7 @@ modules:
       - type: git
         url: https://github.com/daniacosta-dev/aurora-media-player
         branch: main
-        commit: b65e409673f3c162c88861ffe12bae23af263b01
+        commit: 27bbac558a872b6b3d77ee7fba7c0dc536186379
       # Regenerate after any Cargo.lock change:
       #   pip install flatpak-builder-tools
       #   flatpak-cargo-generator.py Cargo.lock -o build-aux/cargo-sources.json

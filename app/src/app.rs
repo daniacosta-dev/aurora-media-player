@@ -99,12 +99,16 @@ impl AuroraMediaApp {
         app.connect_activate(|app| {
             let window = MediaWindow::new(app);
             window.present();
+            // Apply after present() so our provider is installed last and wins
+            // over libadwaita's per-window colour providers.
+            crate::ui::headerbar::apply_custom_colors();
         });
 
         // Handle file opens from CLI or file manager
         app.connect_open(|app, files, _hint| {
             let window = MediaWindow::new(app);
             window.present();
+            crate::ui::headerbar::apply_custom_colors();
             if let Some(file) = files.first() {
                 if let Some(path) = file.path() {
                     window.open_file(&path);
