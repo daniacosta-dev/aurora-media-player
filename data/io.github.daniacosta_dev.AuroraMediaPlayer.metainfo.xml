@@ -3,16 +3,16 @@
   <id>io.github.daniacosta_dev.AuroraMediaPlayer</id>
 
   <name>Aurora Media Player</name>
-  <summary>Modern media player for GNOME</summary>
+  <summary>Modern and customizable media player</summary>
 
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
 
   <description>
     <p>
-      Aurora Media Player is a modern, clean media player for GNOME built with
-      GTK4 and libadwaita. Powered by mpv, it supports virtually all video and
-      audio formats with high-quality hardware-accelerated playback.
+      Aurora Media Player is a modern, clean media player built with GTK4 and
+      libadwaita. Powered by mpv, it supports virtually all video and audio
+      formats with high-quality hardware-accelerated playback.
     </p>
     <p>Features:</p>
     <ul>
@@ -26,6 +26,7 @@
       <li>Multi-track audio and subtitle selection</li>
       <li>Hardware-accelerated decoding via VA-API</li>
       <li>MPRIS support for system media controls</li>
+      <li>Custom color theme — pick your own accent, background, and text colors</li>
     </ul>
   </description>
 
@@ -87,6 +88,15 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.1.2" date="2026-03-25">
+      <description>
+        <p>New features and improvements:</p>
+        <ul>
+          <li>Custom color theme: choose your own accent, background, and text/icon colors</li>
+          <li>Color pickers with per-color reset button to restore system defaults</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.1" date="2025-03-25">
       <description>
         <p>Improvements and bug fixes:</p>
