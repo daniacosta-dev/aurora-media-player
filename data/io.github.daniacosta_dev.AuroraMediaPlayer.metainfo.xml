@@ -34,7 +34,7 @@
     <name>Daniel Acosta</name>
   </developer>
 
-  <url type="homepage">https://github.com/daniacosta-dev/aurora-media-player</url>
+  <url type="homepage">https://daniacosta-dev.github.io/aurora-media-player/</url>
   <url type="bugtracker">https://github.com/daniacosta-dev/aurora-media-player/issues</url>
 
   <launchable type="desktop-id">io.github.daniacosta_dev.AuroraMediaPlayer.desktop</launchable>
