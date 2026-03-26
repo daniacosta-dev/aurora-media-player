@@ -121,7 +121,7 @@ modules:
       - type: git
         url: https://github.com/daniacosta-dev/aurora-media-player
         branch: main
-        commit: 27bbac558a872b6b3d77ee7fba7c0dc536186379
+        commit: 07cefcfc49547315b046835abde42b86ee43d163
       # Regenerate after any Cargo.lock change:
       #   pip install flatpak-builder-tools
       #   flatpak-cargo-generator.py Cargo.lock -o build-aux/cargo-sources.json
