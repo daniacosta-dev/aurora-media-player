@@ -24,10 +24,35 @@ finish-args:
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
+  prepend-pkg-config-path: /app/lib64/pkgconfig
   env:
     CARGO_HOME: /run/build/aurora-media/cargo
 
 modules:
+
+  # ─── libplacebo ───────────────────────────────────────────────────────────
+  # Required by mpv 0.38+ — not included in the GNOME 48 runtime.
+  - name: libplacebo
+    buildsystem: meson
+    config-opts:
+      - -Dvulkan=disabled
+      - -Dd3d11=disabled
+      - -Dglslang=disabled
+      - -Dopengl=disabled
+      - -Ddemos=false
+      - -Dtests=false
+    sources:
+      - type: archive
+        url: https://github.com/haasn/libplacebo/archive/refs/tags/v7.349.0.tar.gz
+        sha256: 627e32439a0b3d2b90368ead7e919f470ee7446c87cc0f7841bbe319b23aa8b1
+
+  # ─── libass ───────────────────────────────────────────────────────────────
+  - name: libass
+    buildsystem: autotools
+    sources:
+      - type: archive
+        url: https://github.com/libass/libass/releases/download/0.17.3/libass-0.17.3.tar.gz
+        sha256: da7c348deb6fa6c24507afab2dee7545ba5dd5bbf90a137bfe9e738f7df68537
 
   # ─── mpv ──────────────────────────────────────────────────────────────────
   # libmpv is not in the GNOME runtime — build it from source.
@@ -41,7 +66,7 @@ modules:
       - -Dtests=false
       - -Dalsa=disabled
       - -Dmanpage-build=disabled
-      - -Dlua=luajit
+      - -Dlua=disabled
     sources:
       - type: archive
         url: https://github.com/mpv-player/mpv/archive/refs/tags/v0.38.0.tar.gz
@@ -73,6 +98,8 @@ modules:
       env:
         CARGO_HOME: /run/build/aurora-media-player/cargo
         RUST_BACKTRACE: '1'
+        LIBRARY_PATH: /app/lib64
+        RUSTFLAGS: '-L /app/lib64 -C link-arg=-lplacebo'
     build-commands:
       # Offline build using pre-generated cargo-sources.json
       - cargo --offline fetch --manifest-path Cargo.toml --verbose
@@ -91,8 +118,8 @@ modules:
     sources:
       - type: git
         url: https://github.com/daniacosta-dev/aurora-media-player
-        tag: v0.1.1
-        commit: 3c78a0b2613bd57babb0aafb1a5c99c36f575601
+        branch: main
+        commit: b65e409673f3c162c88861ffe12bae23af263b01
       # Regenerate after any Cargo.lock change:
       #   pip install flatpak-builder-tools
       #   flatpak-cargo-generator.py Cargo.lock -o build-aux/cargo-sources.json
