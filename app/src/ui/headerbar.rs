@@ -227,7 +227,7 @@ impl MediaHeaderBar {
         };
 
         let (screenshot_folder_btn, screenshot_folder_lbl) = mk_item("camera-photo-symbolic", t("Open Screenshot Folder"));
-        let (report_issue_btn, report_issue_lbl)           = mk_item("bug-symbolic",           t("Report Issue"));
+        let (report_issue_btn, report_issue_lbl)           = mk_item("help-about-symbolic",     t("Report Issue"));
         report_issue_btn.set_cursor_from_name(Some("pointer"));
 
         menu_box.append(&open_file_btn);
@@ -538,7 +538,7 @@ impl MediaHeaderBar {
                             .margin_start(8).margin_end(8)
                             .margin_top(2).margin_bottom(2)
                             .build();
-                        row.append(&gtk::Image::from_icon_name("document-symbolic"));
+                        row.append(&gtk::Image::from_icon_name("text-x-generic-symbolic"));
                         let lbl = gtk::Label::builder()
                             .label(&entry.title)
                             .halign(gtk::Align::Start)

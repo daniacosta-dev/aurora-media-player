@@ -2,7 +2,40 @@
 <gresources>
   <gresource prefix="/io/github/daniacosta_dev/AuroraMediaPlayer">
     <file alias="style.css">style.css</file>
-    <!-- Bundled app icon — registered with the GTK icon theme via add_resource_path() in app.rs -->
+    <!-- App icon -->
     <file>icons/scalable/apps/io.github.daniacosta_dev.AuroraMediaPlayer.svg</file>
+    <!-- Bundled UI icons (ensure they work on any distro/theme) -->
+    <file>icons/scalable/actions/document-edit-symbolic.svg</file>
+    <file>icons/scalable/actions/document-open-recent-symbolic.svg</file>
+    <file>icons/scalable/actions/document-open-symbolic.svg</file>
+    <file>icons/scalable/actions/edit-clear-symbolic.svg</file>
+    <file>icons/scalable/actions/edit-delete-symbolic.svg</file>
+    <file>icons/scalable/actions/go-next-symbolic.svg</file>
+    <file>icons/scalable/actions/help-about-symbolic.svg</file>
+    <file>icons/scalable/actions/insert-link-symbolic.svg</file>
+    <file>icons/scalable/actions/list-add-symbolic.svg</file>
+    <file>icons/scalable/actions/list-remove-symbolic.svg</file>
+    <file>icons/scalable/actions/media-playback-pause-symbolic.svg</file>
+    <file>icons/scalable/actions/media-playback-start-symbolic.svg</file>
+    <file>icons/scalable/actions/media-skip-backward-symbolic.svg</file>
+    <file>icons/scalable/actions/media-skip-forward-symbolic.svg</file>
+    <file>icons/scalable/actions/media-view-subtitles-symbolic.svg</file>
+    <file>icons/scalable/actions/view-list-symbolic.svg</file>
+    <file>icons/scalable/categories/preferences-system-symbolic.svg</file>
+    <file>icons/scalable/devices/audio-headphones-symbolic.svg</file>
+    <file>icons/scalable/devices/camera-photo-symbolic.svg</file>
+    <file>icons/scalable/devices/media-optical-symbolic.svg</file>
+    <file>icons/scalable/mimetypes/audio-x-generic-symbolic.svg</file>
+    <file>icons/scalable/mimetypes/text-x-generic-symbolic.svg</file>
+    <file>icons/scalable/places/folder-videos-symbolic.svg</file>
+    <file>icons/scalable/status/audio-volume-high-symbolic.svg</file>
+    <file>icons/scalable/status/audio-volume-low-symbolic.svg</file>
+    <file>icons/scalable/status/audio-volume-medium-symbolic.svg</file>
+    <file>icons/scalable/status/audio-volume-muted-symbolic.svg</file>
+    <file>icons/scalable/status/dialog-warning-symbolic.svg</file>
+    <file>icons/scalable/status/media-playlist-repeat-song-symbolic.svg</file>
+    <file>icons/scalable/status/media-playlist-repeat-symbolic.svg</file>
+    <file>icons/scalable/status/media-playlist-shuffle-symbolic.svg</file>
+    <file>icons/scalable/ui/window-close-symbolic.svg</file>
   </gresource>
 </gresources>
