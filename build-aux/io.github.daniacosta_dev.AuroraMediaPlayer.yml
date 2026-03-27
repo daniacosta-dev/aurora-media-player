@@ -12,8 +12,10 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --socket=pulseaudio
-  # Session restore reopens files by absolute path
-  - --filesystem=home
+  - --filesystem=xdg-videos
+  - --filesystem=xdg-music
+  - --filesystem=xdg-download
+  - --filesystem=xdg-pictures
   - --filesystem=/run/media
   - --device=dri
   - --own-name=org.mpris.MediaPlayer2.aurora-media-player
