@@ -16,3 +16,6 @@ build-dir/
 
 # Claude memory
 .claude/
+
+# Local wiki / notes
+wiki/
