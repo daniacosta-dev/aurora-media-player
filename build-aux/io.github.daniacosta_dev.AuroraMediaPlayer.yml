@@ -82,7 +82,8 @@ modules:
     build-options:
       env:
         CARGO_HOME: /run/build/aurora-media-player/cargo
-        RUSTFLAGS: '-C link-arg=-lplacebo'
+        PKG_CONFIG_ALLOW_CROSS: "1"
+        RUSTFLAGS: "-C link-arg=-lplacebo -L /app/lib"
     build-commands:
       - cargo --offline fetch --manifest-path Cargo.toml --verbose
       - cargo --offline build --release --manifest-path Cargo.toml
@@ -97,5 +98,5 @@ modules:
       - type: git
         url: https://github.com/daniacosta-dev/aurora-media-player
         branch: main
-        commit: 07cefcfc49547315b046835abde42b86ee43d163
+        commit: d34096bd9ee1abfe92877caf9ff1e8a7a3c71129
       - cargo-sources.json
