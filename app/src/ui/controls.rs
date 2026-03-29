@@ -40,7 +40,7 @@ pub struct PlayerControls {
 }
 
 impl PlayerControls {
-    pub fn new(state: SharedState, on_screenshot: impl Fn() + 'static) -> Self {
+    pub fn new(state: SharedState, on_screenshot: impl Fn(std::path::PathBuf) + 'static) -> Self {
         let root = Box::builder()
             .orientation(Orientation::Vertical)
             .css_classes(vec!["toolbar", "controls-bar"])
@@ -298,10 +298,21 @@ impl PlayerControls {
         {
             let state_c = state.clone();
             screenshot_btn.connect_clicked(move |_| {
-                if let Some(p) = state_c.borrow().player.as_ref() {
-                    p.execute(PlayerCommand::Screenshot).ok();
+                let tmp_path = std::env::temp_dir().join(format!(
+                    "aurora-screenshot-{}.png",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                ));
+                let saved = if let Some(p) = state_c.borrow().player.as_ref() {
+                    p.execute(PlayerCommand::ScreenshotToFile(tmp_path.clone())).is_ok()
+                } else {
+                    false
+                };
+                if saved {
+                    on_screenshot(tmp_path);
                 }
-                on_screenshot();
             });
         }
 

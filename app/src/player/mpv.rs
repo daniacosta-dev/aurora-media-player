@@ -201,20 +201,9 @@ impl MpvPlayer {
         mpv.set_property("input-default-bindings", false).ok();
         mpv.set_property("input-vo-keyboard", false).ok();
 
-        // Save screenshots to ~/Pictures/Screenshots/Aurora Media Player,
-        // falling back to ~/Pictures/Aurora Media Player if Screenshots doesn't exist.
-        if let Some(pic_dir) = dirs::picture_dir() {
-            let screenshot_dir = {
-                let ss = pic_dir.join("Screenshots");
-                if ss.exists() { ss.join("Aurora Media Player") }
-                else           { pic_dir.join("Aurora Media Player") }
-            };
-            std::fs::create_dir_all(&screenshot_dir).ok();
-            if let Some(dir_str) = screenshot_dir.to_str() {
-                mpv.set_property("screenshot-directory", dir_str).ok();
-                mpv.set_property("screenshot-template", "aurora-%n").ok();
-            }
-        }
+        // Screenshots are saved to a temp path via ScreenshotToFile so that
+        // the app can present a file-chooser dialog (portal) to let the user
+        // pick the final destination — no broad filesystem permissions needed.
 
         Ok(Self { mpv })
     }
@@ -277,6 +266,10 @@ impl MpvPlayer {
             }
             PlayerCommand::Screenshot => {
                 self.mpv.command("screenshot", &[]).ok();
+            }
+            PlayerCommand::ScreenshotToFile(path) => {
+                let path_str = path.to_str().ok_or_else(|| anyhow::anyhow!("non-UTF8 path"))?;
+                mpv_command_array(self.mpv.ctx.as_ptr(), &["screenshot-to-file", path_str, "video"])?;
             }
             PlayerCommand::SetAudioTrack(id) => {
                 self.mpv.set_property("aid", id).ok();

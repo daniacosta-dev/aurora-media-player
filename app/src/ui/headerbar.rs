@@ -226,7 +226,7 @@ impl MediaHeaderBar {
             (btn, lbl)
         };
 
-        let (screenshot_folder_btn, screenshot_folder_lbl) = mk_item("camera-photo-symbolic", t("Open Screenshot Folder"));
+        let (screenshot_folder_btn, screenshot_folder_lbl) = mk_item("camera-photo-symbolic", t("Open Pictures Folder"));
         let (report_issue_btn, report_issue_lbl)           = mk_item("help-about-symbolic",     t("Report Issue"));
         report_issue_btn.set_cursor_from_name(Some("pointer"));
 
@@ -363,13 +363,8 @@ impl MediaHeaderBar {
             screenshot_folder_btn.connect_clicked(move |_| {
                 if let Some(f) = fp.upgrade() { f.popdown(); }
                 if let Some(pic) = dirs::picture_dir() {
-                    let ss = pic.join("Screenshots");
-                    let dir = if ss.exists() { ss.join("Aurora Media Player") }
-                              else { pic.join("Aurora Media Player") };
-                    std::fs::create_dir_all(&dir).ok();
-                    std::process::Command::new("xdg-open")
-                        .arg(dir.to_string_lossy().as_ref())
-                        .spawn().ok();
+                    let uri = gio::File::for_path(&pic).uri();
+                    gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>).ok();
                 }
             });
         }
@@ -645,7 +640,7 @@ impl MediaHeaderBar {
         self.open_url_lbl.set_label(t("Open URL or Playlist…"));
         self.open_sub_lbl.set_label(t("Load Subtitle File…"));
         self.recent_row_lbl.set_label(t("Recent Files"));
-        self.screenshot_folder_lbl.set_label(t("Open Screenshot Folder"));
+        self.screenshot_folder_lbl.set_label(t("Open Pictures Folder"));
         self.report_issue_lbl.set_label(t("Report Issue"));
         self.playlist_btn.set_tooltip_text(Some(t("Toggle playlist")));
         self.settings_btn.set_tooltip_text(Some(t("Settings")));

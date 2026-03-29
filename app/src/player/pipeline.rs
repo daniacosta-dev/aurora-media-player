@@ -31,6 +31,7 @@ pub enum PlayerCommand {
     NextFrame,
     PrevFrame,
     Screenshot,
+    ScreenshotToFile(std::path::PathBuf),
     SetRepeat(RepeatMode),
     SetAudioTrack(i64),
     SetSubtitleTrack(i64),   // 0 means disable

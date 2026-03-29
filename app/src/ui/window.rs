@@ -308,10 +308,27 @@ impl MediaWindow {
         let video = Rc::new(VideoArea::new(state.clone()));
         let controls = Rc::new(PlayerControls::new(state.clone(), {
             let toast_w = toast_overlay.downgrade();
-            move || {
-                if let Some(t) = toast_w.upgrade() {
-                    t.add_toast(adw::Toast::new(crate::i18n::t("Screenshot saved")));
-                }
+            let window_w = window.downgrade();
+            move |tmp_path: std::path::PathBuf| {
+                let dialog = gtk::FileDialog::builder()
+                    .title(crate::i18n::t("Save Screenshot"))
+                    .initial_name("screenshot.png")
+                    .build();
+                let parent = window_w.upgrade().map(|w| w.upcast::<gtk::Window>());
+                let toast_w2 = toast_w.clone();
+                let tmp = tmp_path.clone();
+                dialog.save(parent.as_ref(), None::<&gio::Cancellable>, move |result| {
+                    if let Ok(file) = result {
+                        if let Some(dest) = file.path() {
+                            if std::fs::copy(&tmp, &dest).is_ok() {
+                                if let Some(t) = toast_w2.upgrade() {
+                                    t.add_toast(adw::Toast::new(crate::i18n::t("Screenshot saved")));
+                                }
+                            }
+                        }
+                    }
+                    std::fs::remove_file(&tmp).ok();
+                });
             }
         }));
         controls.apply_layout(fixed_mode);
@@ -585,6 +602,7 @@ impl MediaWindow {
         {
             let state_c        = state.clone();
             let win_weak       = window.downgrade();
+            let toast_w_kb     = toast_overlay.downgrade();
             let playlist_btn_w = header.playlist_btn.downgrade();
             let open_file_w    = header.open_file_btn.downgrade();
             let open_url_w     = header.open_url_btn.downgrade();
@@ -709,8 +727,38 @@ impl MediaWindow {
 
                     // ── Screenshot ───────────────────────────────────────
                     gdk4::Key::s | gdk4::Key::S => {
-                        if let Some(p) = state_c.borrow().player.as_ref() {
-                            p.execute(PlayerCommand::Screenshot).ok();
+                        let tmp_path = std::env::temp_dir().join(format!(
+                            "aurora-screenshot-{}.png",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                        ));
+                        let saved = if let Some(p) = state_c.borrow().player.as_ref() {
+                            p.execute(PlayerCommand::ScreenshotToFile(tmp_path.clone())).is_ok()
+                        } else {
+                            false
+                        };
+                        if saved {
+                            let dialog = gtk::FileDialog::builder()
+                                .title(crate::i18n::t("Save Screenshot"))
+                                .initial_name("screenshot.png")
+                                .build();
+                            let parent = win_weak.upgrade().map(|w| w.upcast::<gtk::Window>());
+                            let toast_w2 = toast_w_kb.clone();
+                            let tmp = tmp_path.clone();
+                            dialog.save(parent.as_ref(), None::<&gio::Cancellable>, move |result| {
+                                if let Ok(file) = result {
+                                    if let Some(dest) = file.path() {
+                                        if std::fs::copy(&tmp, &dest).is_ok() {
+                                            if let Some(t) = toast_w2.upgrade() {
+                                                t.add_toast(adw::Toast::new(crate::i18n::t("Screenshot saved")));
+                                            }
+                                        }
+                                    }
+                                }
+                                std::fs::remove_file(&tmp).ok();
+                            });
                         }
                     }
 
